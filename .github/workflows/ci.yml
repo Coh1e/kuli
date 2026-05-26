@@ -73,7 +73,18 @@ jobs:
           restore-keys: vcpkg-${{ matrix.preset }}-
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # Force clang to use gcc-14's libstdc++ (has C++23 std::expected);
+            # clang's auto-selection picks an older one on this image.
+            gccdir=$(ls -d /usr/lib/gcc/x86_64-linux-gnu/14* | head -1)
+            cmake --preset ${{ matrix.preset }} \
+              -DCMAKE_CXX_FLAGS="--gcc-install-dir=$gccdir" \
+              -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=$gccdir"
+          else
+            cmake --preset ${{ matrix.preset }}
+          fi
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
