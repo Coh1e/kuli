@@ -40,14 +40,15 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # Use clang-18 with its own libc++ (which has C++23 std::expected; the
-      # runner's libstdc++ toolchain that clang auto-selects does not). The
-      # linux-clang preset passes -stdlib=libc++.
-      - name: Install clang-18 + libc++ + Ninja (Linux)
+      # clang-18 + a complete g++-14 toolchain: clang auto-selects gcc-14's
+      # libstdc++ (which has C++23 std::expected) and matches the libstdc++ ABI
+      # of vcpkg's C++ libs (CLI11). Installing only libstdc++-*-dev headers is
+      # not enough — clang needs a complete gcc install to select it.
+      - name: Install clang-18 + g++-14 + Ninja (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang-18 libc++-18-dev libc++abi-18-dev
+          sudo apt-get install -y ninja-build clang-18 g++-14
           sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
           sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
 
