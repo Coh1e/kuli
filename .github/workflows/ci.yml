@@ -40,9 +40,15 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Install clang + Ninja (Linux)
+      # The runner's default clang ships a stdlib without std::expected (C++23);
+      # pin clang-18 + libstdc++-14 and make them the default clang/clang++.
+      - name: Install clang-18 + Ninja (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-18 libstdc++-14-dev
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
 
       - name: Install Ninja (macOS)
         if: runner.os == 'macOS'
