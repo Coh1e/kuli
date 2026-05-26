@@ -1,0 +1,4 @@
+schema = 1
+name = "examples"
+description = "kuli example blueprints (M0/M1 smoke)"
+kuli_min = "0.1.0"

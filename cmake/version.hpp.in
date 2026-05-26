@@ -1,0 +1,12 @@
+#pragma once
+// Generated from cmake/version.hpp.in by configure_file. Do not edit the
+// generated copy; bump project(VERSION ...) in the root CMakeLists.txt.
+
+#define KULI_VERSION       "@PROJECT_VERSION@"
+#define KULI_VERSION_MAJOR  @PROJECT_VERSION_MAJOR@
+#define KULI_VERSION_MINOR  @PROJECT_VERSION_MINOR@
+#define KULI_VERSION_PATCH  @PROJECT_VERSION_PATCH@
+
+namespace kuli {
+inline constexpr const char* kVersion = KULI_VERSION;
+}  // namespace kuli

@@ -1,0 +1,16 @@
+{
+  "name": "kuli",
+  "version": "0.1.0",
+  "description": "Fuse multi-source / multi-machine capability into a peer mesh",
+  "dependencies": [
+    "openssl",
+    "nlohmann-json",
+    "cli11",
+    "doctest",
+    "miniz",
+    {
+      "name": "curl",
+      "features": ["openssl", "http2"]
+    }
+  ]
+}

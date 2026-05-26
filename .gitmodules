@@ -1,0 +1,12 @@
+[submodule "ref/luban"]
+	path = ref/luban
+	url = https://github.com/Coh1e/luban.git
+[submodule "ref/luban-bps"]
+	path = ref/luban-bps
+	url = https://github.com/Coh1e/luban-bps.git
+[submodule "ref/bdpcs-cpp"]
+	path = ref/bdpcs-cpp
+	url = https://github.com/Coh1e/bdpcs-cpp.git
+[submodule "ref/mozi"]
+	path = ref/mozi
+	url = https://github.com/Coh1e/mozi.git

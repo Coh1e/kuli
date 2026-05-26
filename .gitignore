@@ -1,0 +1,7 @@
+/build/
+/.kuli/
+*.user
+.vs/
+.cache/
+compile_commands.json
+vcpkg_installed/
