@@ -1,0 +1,86 @@
+name: ci
+
+# Cross-platform build + test. Windows MSVC is the primary release target
+# (docs §12.3); linux-clang and macos enforce R-NF-05 ("must compile + run the
+# platform-neutral subset"). The blueprint feature does not use ref/, so
+# submodules are intentionally not checked out.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, preset: windows-msvc }
+          - { os: ubuntu-latest,  preset: linux-clang }
+          - { os: macos-latest,   preset: macos }
+    steps:
+      - uses: actions/checkout@v4
+
+      # cl / ninja / dumpbin in PATH for the Ninja+MSVC preset.
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Newest Xcode → clang with libc++ std::expected (LLVM 17+).
+      - name: Select Xcode (macOS)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # Point the presets at the runner's preinstalled vcpkg, and route vcpkg's
+      # binary cache to a workspace dir we can cache across runs.
+      - name: vcpkg env
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$GITHUB_WORKSPACE/.vcpkg-cache" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/.vcpkg-cache"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ matrix.preset }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.preset }}-
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      # R-NF-02: the release binary must not pull a dynamic CRT.
+      - name: Static-link gate (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $deps = dumpbin /DEPENDENTS build/windows-msvc/apps/kuli/kuli.exe | Select-String '\.dll'
+          $deps
+          if ($deps | Select-String 'vcruntime|msvcp|api-ms-win-crt|ucrtbase') {
+            Write-Error 'forbidden dynamic CRT dependency (R-NF-02)'
+            exit 1
+          }

@@ -2,8 +2,9 @@
 #
 # Invariants this file guards (docs/requirements.md §5):
 #   R-NF-02  core is statically linked: /MT on MSVC (via x64-windows-static
-#            triplet + CMAKE_MSVC_RUNTIME_LIBRARY), -static on clang/gcc. A
-#            fresh OS unzip must run kuli.exe with no system runtime DLLs.
+#            triplet + CMAKE_MSVC_RUNTIME_LIBRARY) so a fresh OS unzip runs
+#            kuli.exe with no system runtime DLLs. Linux statically links
+#            libstdc++/libgcc; macOS links the system libs (no static libc).
 #   R-NF-05  cross-platform day-1: this file MUST configure on Linux/macOS
 #            too (no `if(NOT WIN32) FATAL_ERROR`). Win32 headers are confined
 #            to libs/kuli-platform's win TUs; everything else is portable.

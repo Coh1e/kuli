@@ -33,8 +33,8 @@ target_link_libraries(kuli-tests PRIVATE
     kuli::bp
     kuli-build-flags)
 
-if(NOT MSVC)
-    target_link_options(kuli-tests PRIVATE -static -static-libgcc -static-libstdc++)
+if(NOT MSVC AND NOT APPLE)
+    target_link_options(kuli-tests PRIVATE -static-libgcc -static-libstdc++)
 endif()
 
 # Whole suite + per-module filters.

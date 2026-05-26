@@ -10,9 +10,10 @@ target_link_libraries(kuli PRIVATE
     kuli-gen
     kuli-build-flags)
 
-# Static link so kuli.exe runs on a fresh OS with no system runtime DLLs
-# (R-NF-02). MSVC achieves this via CMAKE_MSVC_RUNTIME_LIBRARY; clang/gcc
-# need explicit flags.
-if(NOT MSVC)
-    target_link_options(kuli PRIVATE -static -static-libgcc -static-libstdc++)
+# Statically link the C++ runtime for portability. Full `-static` (incl. libc)
+# is the Windows /MT story (handled by the x64-windows-static triplet); on Linux
+# we keep libstdc++/libgcc static but libc dynamic (full-static + OpenSSL is
+# fragile), and macOS has no static libc, so we add nothing there.
+if(NOT MSVC AND NOT APPLE)
+    target_link_options(kuli PRIVATE -static-libgcc -static-libstdc++)
 endif()
