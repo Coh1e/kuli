@@ -8,6 +8,8 @@
     "cli11",
     "doctest",
     "miniz",
+    "zlib",
+    "zstd",
     {
       "name": "curl",
       "features": ["openssl", "http2"]

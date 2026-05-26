@@ -2,6 +2,8 @@
 # named ctest entry (via --test-case filter) so `ctest -R <module>` works
 # regardless of whether doctest's discover module is on CMAKE_MODULE_PATH.
 find_package(doctest CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)         # test fixtures compress tars
+find_package(zstd CONFIG REQUIRED)
 
 add_executable(kuli-tests
     test_main.cpp
@@ -31,6 +33,8 @@ target_link_libraries(kuli-tests PRIVATE
     kuli::ir
     kuli::engine
     kuli::bp
+    ZLIB::ZLIB
+    zstd::libzstd
     kuli-build-flags)
 
 if(NOT MSVC AND NOT APPLE)

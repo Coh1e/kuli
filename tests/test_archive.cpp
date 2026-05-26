@@ -1,9 +1,16 @@
 #include <doctest/doctest.h>
 
+#include <zlib.h>
+#include <zstd.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <sstream>
+#include <vector>
 
 #include "kuli/store/archive.hpp"
 
@@ -23,6 +30,75 @@ std::string read(const fs::path& p) {
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+void write_bytes(const fs::path& p, const std::string& b) {
+    std::ofstream(p, std::ios::binary).write(b.data(), static_cast<std::streamsize>(b.size()));
+}
+
+// --- minimal in-test ustar tar writer + compressors (hermetic fixtures) ---
+std::string tar_header(const std::string& name, std::size_t size, char type) {
+    char h[512];
+    std::memset(h, 0, sizeof(h));
+    std::memcpy(h, name.c_str(), std::min<std::size_t>(name.size(), 100));
+    std::snprintf(h + 100, 8, "%07o", 0644u);
+    std::snprintf(h + 124, 12, "%011o", static_cast<unsigned>(size));
+    std::snprintf(h + 136, 12, "%011o", 0u);
+    std::memset(h + 148, ' ', 8);  // checksum field = spaces during calc
+    h[156] = type;
+    std::memcpy(h + 257, "ustar", 5);
+    h[263] = '0';
+    h[264] = '0';
+    unsigned sum = 0;
+    for (int i = 0; i < 512; ++i) sum += static_cast<unsigned char>(h[i]);
+    std::snprintf(h + 148, 7, "%06o", sum);
+    h[155] = ' ';
+    return std::string(h, 512);
+}
+struct TEnt {
+    std::string name;
+    std::string content;
+    bool is_dir = false;
+    char type = '0';
+};
+std::string make_tar(const std::vector<TEnt>& es) {
+    std::string t;
+    for (const auto& e : es) {
+        std::string nm = e.name;
+        char type = e.is_dir ? '5' : e.type;
+        if (e.is_dir && (nm.empty() || nm.back() != '/')) nm += '/';
+        bool has_data = !e.is_dir && type != '2';
+        t += tar_header(nm, has_data ? e.content.size() : 0, type);
+        if (has_data && !e.content.empty()) {
+            t += e.content;
+            t.append((512 - e.content.size() % 512) % 512, '\0');
+        }
+    }
+    t.append(1024, '\0');  // two zero blocks = end
+    return t;
+}
+std::string gzip_compress(const std::string& in) {
+    z_stream s{};
+    deflateInit2(&s, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+    s.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
+    s.avail_in = static_cast<uInt>(in.size());
+    std::string out;
+    std::vector<char> buf(1 << 16);
+    int rc;
+    do {
+        s.next_out = reinterpret_cast<Bytef*>(buf.data());
+        s.avail_out = static_cast<uInt>(buf.size());
+        rc = deflate(&s, Z_FINISH);
+        out.append(buf.data(), buf.size() - s.avail_out);
+    } while (rc != Z_STREAM_END);
+    deflateEnd(&s);
+    return out;
+}
+std::string zstd_compress(const std::string& in) {
+    std::size_t cap = ZSTD_compressBound(in.size());
+    std::string out(cap, '\0');
+    std::size_t n = ZSTD_compress(out.data(), cap, in.data(), in.size(), 3);
+    out.resize(n);
+    return out;
 }
 }  // namespace
 
@@ -104,11 +180,48 @@ TEST_CASE("archive accepts a filename containing '..' (L-1, no false reject)") {
     fs::remove_all(dir);
 }
 
+TEST_CASE("archive .tar round-trip with single-top-dir flatten") {
+    fs::path dir = scratch();
+    write_bytes(dir / "a.tar", make_tar({{"tool-1/bin/x.txt", "hi"}, {"tool-1/README", "r"}}));
+    auto r = archive::extract(dir / "a.tar", dir / "out");
+    REQUIRE(r.has_value());
+    CHECK(read(dir / "out" / "bin" / "x.txt") == "hi");  // "tool-1/" stripped
+    CHECK(fs::exists(dir / "out" / "README"));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("archive .tar.gz extracts (gzip + tar)") {
+    fs::path dir = scratch();
+    write_bytes(dir / "a.tar.gz", gzip_compress(make_tar({{"pkg/data.txt", "gzipped"}})));
+    auto r = archive::extract(dir / "a.tar.gz", dir / "out");
+    REQUIRE(r.has_value());
+    CHECK(read(dir / "out" / "data.txt") == "gzipped");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("archive .tar.zst extracts (zstd + tar)") {
+    fs::path dir = scratch();
+    write_bytes(dir / "a.tar.zst", zstd_compress(make_tar({{"pkg/data.txt", "zstandard"}})));
+    auto r = archive::extract(dir / "a.tar.zst", dir / "out");
+    REQUIRE(r.has_value());
+    CHECK(read(dir / "out" / "data.txt") == "zstandard");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("archive tar rejects a symlink entry") {
+    fs::path dir = scratch();
+    write_bytes(dir / "a.tar",
+                make_tar({{"pkg/ok.txt", "x"}, {"pkg/evil", "", false, /*symlink*/ '2'}}));
+    auto r = archive::extract(dir / "a.tar", dir / "out");
+    CHECK_FALSE(r.has_value());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("archive unsupported format reports a diagnostic") {
     fs::path dir = scratch();
-    fs::path tar = dir / "x.tar.gz";
-    { std::ofstream(tar) << "junk"; }
-    auto r = archive::extract(tar, dir / "out");
+    fs::path bz = dir / "x.tar.bz2";
+    { std::ofstream(bz) << "junk"; }
+    auto r = archive::extract(bz, dir / "out");
     REQUIRE_FALSE(r.has_value());
     CHECK(r.error().message.find("unsupported") != std::string::npos);
     fs::remove_all(dir);
