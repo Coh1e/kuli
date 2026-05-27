@@ -328,7 +328,8 @@ RawResult execute_exec(const json& node, const fs::path& cwd, bool dry_run) {
         return r;
     }
 
-    kuli::platform::ProcessResult pr = kuli::platform::run_process(argv, run_cwd);
+    bool capture = node.value("capture", false);
+    kuli::platform::ProcessResult pr = kuli::platform::run_process(argv, run_cwd, capture);
     if (!pr.launched) {
         return fail(127,
                     kuli::diag::Diagnostic::error("failed to launch: " + argv[0], "E0622")
@@ -336,7 +337,17 @@ RawResult execute_exec(const json& node, const fs::path& cwd, bool dry_run) {
                     "");
     }
     RawResult r;
-    r.exit_code = pr.exit_code;  // stdout/stderr already streamed to the terminal
+    r.exit_code = pr.exit_code;
+    if (capture) {
+        // Split captured stdout+stderr into lines (the caller renders them);
+        // without capture the child already streamed to the terminal.
+        std::istringstream ss(pr.output);
+        std::string line;
+        while (std::getline(ss, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            r.lines.push_back(line);
+        }
+    }
     return r;
 }
 

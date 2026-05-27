@@ -23,11 +23,12 @@ std::vector<std::string> exit_cmd(int code) {
 #endif
 }
 
-kuli::engine::RawResult run_exec(const std::vector<std::string>& cmd, bool dry = false) {
+kuli::engine::RawResult run_exec(const std::vector<std::string>& cmd, bool dry = false,
+                                 bool capture = false) {
     nlohmann::json ir;
     ir["schema"] = std::string(kuli::ir::SCHEMA);
     ir["kind"] = std::string(kuli::ir::kind::Exec);
-    ir["node"] = {{"at", "local:"}, {"cmd", cmd}};
+    ir["node"] = {{"at", "local:"}, {"cmd", cmd}, {"capture", capture}};
     if (dry) ir["options"] = {{"dry_run", true}};
     kuli::engine::Engine engine;
     kuli::engine::AdapterCall call;
@@ -35,6 +36,15 @@ kuli::engine::RawResult run_exec(const std::vector<std::string>& cmd, bool dry =
     call.cwd = fs::current_path();
     call.ir_doc = ir;
     return engine.execute(call);
+}
+
+// A portable "print this word" command.
+std::vector<std::string> echo_cmd(const std::string& word) {
+#if defined(_WIN32)
+    return {"cmd", "/c", "echo", word};
+#else
+    return {"sh", "-c", "echo " + word};
+#endif
 }
 }  // namespace
 
@@ -59,6 +69,23 @@ TEST_CASE("exec Exec IR --dry-run does not run the command") {
     CHECK(rr.exit_code == 0);
     REQUIRE_FALSE(rr.lines.empty());
     CHECK(rr.lines[0].rfind("dry-run:", 0) == 0);
+}
+
+TEST_CASE("exec run_process captures stdout when capture=true") {
+    auto pr = platform::run_process(echo_cmd("hi-there"), {}, /*capture=*/true);
+    CHECK(pr.launched);
+    CHECK(pr.exit_code == 0);
+    CHECK(pr.output.find("hi-there") != std::string::npos);
+}
+
+TEST_CASE("exec Exec IR capture=true returns output as lines") {
+    auto rr = run_exec(echo_cmd("captured-output"), /*dry=*/false, /*capture=*/true);
+    CHECK(rr.exit_code == 0);
+    bool found = false;
+    for (const auto& l : rr.lines) {
+        if (l.find("captured-output") != std::string::npos) found = true;
+    }
+    CHECK(found);
 }
 
 TEST_CASE("exec Exec IR rejects an empty cmd") {
