@@ -4,8 +4,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 
+#include <chrono>
+
+#include "kuli/crypto/sign.hpp"
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/engine/engine.hpp"
 #include "kuli/ir/ir.hpp"
@@ -34,6 +38,38 @@ json read_json_file(const fs::path& p) {
 }
 
 fs::path cap_dir() { return paths::config_dir() / "capabilities"; }
+
+long now_epoch() {
+    return static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count());
+}
+
+// Load the node's Ed25519 private key (PEM), generating + persisting it on first
+// use at <data>/identity/ed25519.key.
+std::optional<std::string> node_private_key() {
+    fs::path key = paths::identity_dir() / "ed25519.key";
+    if (std::ifstream in{key, std::ios::binary}) {
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+    auto kp = kuli::crypto::ed25519_generate();
+    if (!kp) return std::nullopt;
+    std::error_code ec;
+    fs::create_directories(key.parent_path(), ec);
+    std::ofstream out(key, std::ios::binary | std::ios::trunc);
+    if (!out) return std::nullopt;
+    out << kp->private_pem;
+    return kp->private_pem;
+}
+
+// Canonical bytes a signature covers: the record without its own `sig` field
+// (nlohmann's default object is key-sorted -> deterministic).
+std::string signing_bytes(json record) {
+    record.erase("sig");
+    return record.dump();
+}
 
 // Run an IR through the engine and return its result.
 kuli::engine::RawResult run(const json& ir, const fs::path& cwd) {
@@ -86,13 +122,32 @@ json local_capability() {
     if (reg.is_object()) {
         for (const auto& [name, _] : reg.items()) scriptures.push_back(name);
     }
-    return json{{"host", f.hostname},
-                {"os", f.os},
-                {"arch", f.arch},
-                {"cpu", f.cpu_count},
-                {"kuli", std::string(kuli::kVersion)},
-                {"scriptures", scriptures},
-                {"v", 1}};  // monotonic versioning + signing deferred
+    json rec{{"host", f.hostname},
+             {"os", f.os},
+             {"arch", f.arch},
+             {"cpu", f.cpu_count},
+             {"kuli", std::string(kuli::kVersion)},
+             {"scriptures", scriptures},
+             {"v", now_epoch()}};  // monotonic (unix seconds)
+
+    // Sign with the node identity. If the key/sign is unavailable the record is
+    // still usable locally, just unsigned (sync will reject it as unverified).
+    if (auto priv = node_private_key()) {
+        if (auto pub = kuli::crypto::ed25519_public_of(*priv)) {
+            rec["pubkey"] = *pub;
+            if (auto sig = kuli::crypto::ed25519_sign(*priv, signing_bytes(rec))) {
+                rec["sig"] = *sig;
+            }
+        }
+    }
+    return rec;
+}
+
+bool capability_verify(const json& record) {
+    if (!record.contains("sig") || !record["sig"].is_string()) return false;
+    if (!record.contains("pubkey") || !record["pubkey"].is_string()) return false;
+    return kuli::crypto::ed25519_verify(record["pubkey"].get<std::string>(), signing_bytes(record),
+                                        record["sig"].get<std::string>());
 }
 
 bool capability_matches(const json& record, const std::vector<std::string>& constraints) {
@@ -152,13 +207,26 @@ int capability_sync(const std::string& alias) {
         return report(kuli::diag::Diagnostic::error(
             "peer @" + alias + " did not return a capability record", "E0691"));
     }
+    if (!capability_verify(rec)) {
+        return report(kuli::diag::Diagnostic::error(
+            "capability record from @" + alias + " failed signature verification", "E0695"));
+    }
+    // Monotonic: never replace a cached record with an older-or-equal version.
+    fs::path dst = cap_dir() / (alias + ".json");
+    json cached = read_json_file(dst);
+    if (cached.is_object() && cached.value("v", 0L) >= rec.value("v", 0L)) {
+        std::cout << "@" << alias << " already cached at v" << cached.value("v", 0L)
+                  << " (>= v" << rec.value("v", 0L) << "); keeping it\n";
+        return 0;
+    }
     std::error_code ec;
     fs::create_directories(cap_dir(), ec);
-    std::ofstream out(cap_dir() / (alias + ".json"), std::ios::binary | std::ios::trunc);
+    std::ofstream out(dst, std::ios::binary | std::ios::trunc);
     if (!out) return report(kuli::diag::Diagnostic::error("cannot write capability cache", "E0692"));
     out << rec.dump(2);
     std::cout << "cached capability of @" << alias << " (" << rec.value("os", std::string()) << "/"
-              << rec.value("arch", std::string()) << ", " << rec.value("host", std::string()) << ")\n";
+              << rec.value("arch", std::string()) << ", " << rec.value("host", std::string())
+              << ", v" << rec.value("v", 0L) << ")\n";
     return 0;
 }
 

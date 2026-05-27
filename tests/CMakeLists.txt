@@ -8,6 +8,7 @@ find_package(zstd CONFIG REQUIRED)
 add_executable(kuli-tests
     test_main.cpp
     test_crypto_hash.cpp
+    test_sign.cpp
     test_luau_sandbox.cpp
     test_derivation_hash.cpp
     test_blueprint_eval.cpp
@@ -50,6 +51,7 @@ endif()
 # Whole suite + per-module filters.
 add_test(NAME unit COMMAND kuli-tests)
 add_test(NAME crypto_hash COMMAND kuli-tests --test-case=crypto_hash*)
+add_test(NAME sign COMMAND kuli-tests --test-case=sign*)
 add_test(NAME luau_sandbox COMMAND kuli-tests --test-case=luau_sandbox*)
 add_test(NAME archive COMMAND kuli-tests --test-case=archive*)
 add_test(NAME store COMMAND kuli-tests --test-case=store*)

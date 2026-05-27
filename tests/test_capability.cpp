@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include "kuli/bp/capability.hpp"
+#include "kuli/crypto/sign.hpp"
 
 using namespace kuli;
 
@@ -30,4 +31,28 @@ TEST_CASE("capability matcher handles string / numeric / scripture constraints")
     CHECK_FALSE(bp::capability_matches(rec, {"scripture=docker"}));
     CHECK_FALSE(bp::capability_matches(rec, {"bogus=1"}));  // unknown key
     CHECK_FALSE(bp::capability_matches(rec, {"garbage"}));  // unparseable
+}
+
+TEST_CASE("capability verify accepts a signed record and rejects tampering") {
+    auto kp = crypto::ed25519_generate();
+    REQUIRE(kp.has_value());
+
+    nlohmann::json rec = {{"host", "h"},   {"os", "linux"},
+                          {"arch", "x64"}, {"cpu", 8},
+                          {"kuli", "0.1.0"}, {"scriptures", nlohmann::json::array()},
+                          {"v", 1},        {"pubkey", kp->public_pem}};
+    // Sign over the record minus `sig` (matches capability's signing_bytes).
+    nlohmann::json to_sign = rec;
+    to_sign.erase("sig");
+    rec["sig"] = *crypto::ed25519_sign(kp->private_pem, to_sign.dump());
+
+    CHECK(bp::capability_verify(rec));
+
+    nlohmann::json tampered = rec;
+    tampered["arch"] = "arm64";
+    CHECK_FALSE(bp::capability_verify(tampered));
+
+    nlohmann::json unsigned_rec = rec;
+    unsigned_rec.erase("sig");
+    CHECK_FALSE(bp::capability_verify(unsigned_rec));
 }
