@@ -96,10 +96,13 @@ RawResult fail(int code, const kuli::diag::Diagnostic& d, const std::string& ses
 }
 
 // Pipeline (§10): run staged commands, feeding each stage's stdout into the
-// next stage's stdin. v0 is a local chain (each stage is a command run here);
-// per-stage remote `at:` (cross-host streaming) is the next slice. --dry-run
-// lists the stages without running them.
-RawResult execute_pipeline(const json& node, const fs::path& cwd, bool dry_run) {
+// next stage's stdin. Each stage becomes an Exec IR (with the prior stage's
+// output as node.stdin) dispatched through `run_sub` — so a stage with a remote
+// `at:` rides the transport and runs on its host, store-and-forward through the
+// orchestrator (direct host-to-host streaming is a later optimization).
+// --dry-run lists the stages without running them.
+RawResult execute_pipeline(const json& node, bool dry_run,
+                           const std::function<RawResult(nlohmann::json)>& run_sub) {
     const json& stages = node.at("stages");
     if (dry_run) {
         RawResult r;
@@ -109,40 +112,33 @@ RawResult execute_pipeline(const json& node, const fs::path& cwd, bool dry_run) 
             for (const auto& a : s.value("cmd", json::array())) {
                 if (a.is_string()) joined += (joined.empty() ? "" : " ") + a.get<std::string>();
             }
-            r.lines.push_back("  | " + joined);
+            r.lines.push_back("  " + s.value("at", std::string("local:")) + " | " + joined);
         }
         return r;
     }
 
-    std::string data;       // bytes flowing between stages
-    std::string all_stderr; // accumulated stage diagnostics
+    std::string data;        // text flowing between stages (line-granular for v0)
+    std::string all_stderr;  // accumulated stage diagnostics
     int code = 0;
-    for (std::size_t i = 0; i < stages.size(); ++i) {
-        const json& s = stages[i];
-        std::string at = s.value("at", std::string("local:"));
-        if (at != "local:" && at != "local" && !at.empty()) {
-            return fail(2,
-                        kuli::diag::Diagnostic::error(
-                            "cross-host pipeline stages ('at') are not implemented yet", "E0650")
-                            .with_help("v0 runs all stages on the local host"),
-                        "");
+    for (const json& s : stages) {
+        nlohmann::json exec;
+        exec["schema"] = std::string(kuli::ir::SCHEMA);
+        exec["kind"] = std::string(kuli::ir::kind::Exec);
+        exec["node"] = {{"at", s.value("at", std::string("local:"))},
+                        {"cmd", s.at("cmd")},
+                        {"capture", true},
+                        {"stdin", data}};
+        if (s.contains("cwd")) exec["node"]["cwd"] = s["cwd"];
+
+        RawResult sr = run_sub(std::move(exec));  // local execute_exec or remote route_remote
+        all_stderr += sr.raw_stderr;
+        code = sr.exit_code;
+        std::string next;  // the stage's stdout becomes the next stage's stdin
+        for (const auto& l : sr.lines) {
+            next += l;
+            next += '\n';
         }
-        std::vector<std::string> argv;
-        for (const auto& a : s.value("cmd", json::array())) {
-            if (a.is_string()) argv.push_back(a.get<std::string>());
-        }
-        kuli::platform::ProcessResult pr =
-            kuli::platform::run_process(argv, cwd, /*capture=*/true, /*input=*/data);
-        if (!pr.launched) {
-            return fail(127,
-                        kuli::diag::Diagnostic::error(
-                            "pipeline stage " + std::to_string(i) + " failed to launch: " + argv[0],
-                            "E0651"),
-                        "");
-        }
-        data = pr.output;     // becomes the next stage's stdin
-        all_stderr += pr.error;
-        code = pr.exit_code;  // overall status = the last stage's
+        data = std::move(next);
     }
 
     RawResult r;
@@ -150,10 +146,7 @@ RawResult execute_pipeline(const json& node, const fs::path& cwd, bool dry_run) 
     r.raw_stderr = all_stderr;
     std::istringstream ss(data);
     std::string line;
-    while (std::getline(ss, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        r.lines.push_back(line);
-    }
+    while (std::getline(ss, line)) r.lines.push_back(line);
     return r;
 }
 
@@ -506,7 +499,9 @@ RawResult execute_exec(const json& node, const fs::path& cwd, bool dry_run) {
     }
 
     bool capture = node.value("capture", false);
-    kuli::platform::ProcessResult pr = kuli::platform::run_process(argv, run_cwd, capture);
+    std::string stdin_data = node.value("stdin", std::string());  // piped input (pipeline stages)
+    kuli::platform::ProcessResult pr =
+        kuli::platform::run_process(argv, run_cwd, capture, stdin_data);
     if (!pr.launched) {
         return fail(127,
                     kuli::diag::Diagnostic::error("failed to launch: " + argv[0], "E0622")
@@ -599,7 +594,13 @@ RawResult Engine::execute(const AdapterCall& call) {
     if (ir_kind == std::string(kuli::ir::kind::HostFacts)) return execute_host_facts(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::EnvQuery)) return execute_env_query(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::Exec)) return execute_exec(node_of(), call.cwd, dry_run);
-    if (ir_kind == std::string(kuli::ir::kind::Pipeline)) return execute_pipeline(node_of(), call.cwd, dry_run);
+    if (ir_kind == std::string(kuli::ir::kind::Pipeline)) {
+        return execute_pipeline(node_of(), dry_run, [this, &call](nlohmann::json doc) {
+            AdapterCall sub = call;
+            sub.ir_doc = std::move(doc);
+            return execute(sub);
+        });
+    }
 
     // 2) Open an evidence session under the invocation cwd.
     std::string id = new_session_id();

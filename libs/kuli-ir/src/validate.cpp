@@ -208,6 +208,9 @@ std::expected<void, Diagnostic> validate_exec(const json& node) {
     if (node.contains("capture") && !node["capture"].is_boolean()) {
         return std::unexpected(invalid("Exec.node.capture must be a boolean"));
     }
+    if (node.contains("stdin") && !node["stdin"].is_string()) {
+        return std::unexpected(invalid("Exec.node.stdin must be a string"));
+    }
     return {};
 }
 

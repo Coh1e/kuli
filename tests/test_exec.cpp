@@ -111,6 +111,28 @@ TEST_CASE("exec run_process feeds stdin and captures stdout (sort)") {
     CHECK(a < b);  // sort put apple before banana
 }
 
+TEST_CASE("exec Exec IR feeds node.stdin to the command") {
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::Exec);
+    ir["node"] = {{"at", "local:"}, {"cmd", {"sort"}}, {"capture", true}, {"stdin", "banana\napple\n"}};
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "x";
+    call.cwd = fs::current_path();
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+    CHECK(rr.exit_code == 0);
+    std::size_t a = std::string::npos, b = std::string::npos;
+    for (std::size_t i = 0; i < rr.lines.size(); ++i) {
+        if (rr.lines[i].find("apple") != std::string::npos) a = i;
+        if (rr.lines[i].find("banana") != std::string::npos) b = i;
+    }
+    REQUIRE(a != std::string::npos);
+    REQUIRE(b != std::string::npos);
+    CHECK(a < b);
+}
+
 TEST_CASE("exec Pipeline chains stage stdout into the next stage's stdin") {
 #if defined(_WIN32)
     nlohmann::json stage1 = {{"cmd", {"cmd", "/c", "echo banana& echo apple"}}};
