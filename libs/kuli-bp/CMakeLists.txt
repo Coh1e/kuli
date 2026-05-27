@@ -7,6 +7,7 @@ add_library(kuli-bp STATIC
     src/generation.cpp
     src/gen_cmd.cpp
     src/hosts.cpp
+    src/meshell.cpp
     src/scripture.cpp
     src/source.cpp)
 add_library(kuli::bp ALIAS kuli-bp)

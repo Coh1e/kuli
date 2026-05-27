@@ -11,6 +11,7 @@
 
 #include "kuli/bp/apply.hpp"
 #include "kuli/bp/hosts.hpp"
+#include "kuli/bp/meshell.hpp"
 #include "kuli/bp/scripture.hpp"
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/platform/host.hpp"
@@ -210,6 +211,15 @@ int main(int argc, char** argv) {
     }
 
     if (args.empty()) return print_version();
+
+    // meshell sugar: `kuli @host cmd ...` (a leading @target). The whole argv is
+    // one mesh line; a `|` pipeline is typically passed quoted via `kuli mesh`.
+    if (!args[0].empty() && args[0][0] == '@') {
+        std::string line;
+        for (std::size_t i = 0; i < args.size(); ++i) line += (i ? " " : "") + args[i];
+        return kuli::bp::run_mesh(line, fs::current_path());
+    }
+
     const std::string noun = args[0];
     std::vector<std::string> sub(args.begin() + 1, args.end());
 
@@ -218,6 +228,11 @@ int main(int argc, char** argv) {
     if (noun == "generation") return run_generation(sub);
     if (noun == "scripture") return run_scripture(sub);
     if (noun == "host") return run_host(sub);
+    if (noun == "mesh") {  // `kuli mesh "<@a:cmd | @b:cmd>"`
+        std::string line;
+        for (std::size_t i = 0; i < sub.size(); ++i) line += (i ? " " : "") + sub[i];
+        return kuli::bp::run_mesh(line, fs::current_path());
+    }
     if (noun == "run-ir") {  // agent entry point: execute an IR doc from a file
         if (sub.empty()) {
             return report(kuli::diag::Diagnostic::error("run-ir needs an IR file path", "E0001"));
