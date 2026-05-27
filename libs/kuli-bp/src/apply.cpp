@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,22 @@ int explain(const std::string& spec) {
     print_tree(r->graph, r->graph.root, "", true, true);
     std::cout << "\n" << r->graph.nodes.size() << " derivation(s)\n";
     return 0;
+}
+
+int run_ir(const fs::path& file, const fs::path& cwd) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+        return report_eval_error(kuli::diag::Diagnostic::error(
+            "cannot read IR file: " + file.string(), "E0630"));
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    nlohmann::json doc = nlohmann::json::parse(ss.str(), nullptr, /*allow_exceptions=*/false);
+    if (doc.is_discarded()) {
+        return report_eval_error(
+            kuli::diag::Diagnostic::error("IR file is not valid JSON: " + file.string(), "E0631"));
+    }
+    return run_engine(doc, cwd);
 }
 
 int describe(const std::string& spec, bool json) {

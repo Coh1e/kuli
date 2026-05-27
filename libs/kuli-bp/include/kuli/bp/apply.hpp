@@ -51,4 +51,9 @@ int src_list();
 // `kuli bp describe <spec> [--json]`.
 int describe(const std::string& spec, bool json);
 
+// `kuli run-ir <file>` — execute a kuli/ir/1.0 document read from a file. This
+// is the agent entry point a transport invokes on the far side (the local
+// subprocess now; ssh later). Prints the result; returns the exit code.
+int run_ir(const fs::path& file, const fs::path& cwd);
+
 }  // namespace kuli::bp

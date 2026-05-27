@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <optional>
 #include <random>
@@ -91,6 +92,48 @@ RawResult fail(int code, const kuli::diag::Diagnostic& d, const std::string& ses
     r.exit_code = code;
     r.raw_stderr = kuli::diag::render(d, /*color=*/false);
     r.session_id = session_id;
+    return r;
+}
+
+// Transport seed (§ transport): execute an IR whose node targets a non-local
+// `at:`. The local-subprocess transport rewrites the target to `local:`, ships
+// the IR to a child `kuli run-ir <tmp>`, and relays its output — the same shape
+// a future ssh transport uses (it would invoke kuli on the far host instead).
+RawResult route_remote(const AdapterCall& call, const std::string& at) {
+    if (at != "local-subprocess:" && at != "subprocess:") {
+        return fail(2,
+                    kuli::diag::Diagnostic::error("transport for at: '" + at + "' not implemented yet",
+                                                  "E0640")
+                        .with_help("supported now: local: (in-process), local-subprocess:"),
+                    "");
+    }
+    nlohmann::json ir = call.ir_doc;
+    ir["node"]["at"] = "local:";  // the child runs it locally
+
+    fs::path tmp = fs::temp_directory_path() /
+                   ("kuli-ir-" + std::to_string(reinterpret_cast<std::uintptr_t>(&call)) + ".json");
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return fail(1, kuli::diag::Diagnostic::error("cannot stage IR for transport", "E0642"), "");
+        out << ir.dump();
+    }
+    fs::path self = kuli::platform::paths::current_exe();
+    kuli::platform::ProcessResult pr =
+        kuli::platform::run_process({self.string(), "run-ir", tmp.string()}, call.cwd, /*capture=*/true);
+    std::error_code ec;
+    fs::remove(tmp, ec);
+
+    if (!pr.launched) {
+        return fail(127, kuli::diag::Diagnostic::error("failed to spawn local subprocess", "E0641"), "");
+    }
+    RawResult r;
+    r.exit_code = pr.exit_code;
+    std::istringstream ss(pr.output);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        r.lines.push_back(line);
+    }
     return r;
 }
 
@@ -413,6 +456,16 @@ RawResult Engine::execute(const AdapterCall& call) {
     // 1) Validate against kuli/ir/1.0.
     if (auto v = kuli::ir::validate(call.ir_doc); !v) {
         return fail(kuli::diag::exit_code_of(v.error()), v.error(), "");
+    }
+
+    // 1b) Transport: a non-local node `at:` routes through a transport before any
+    // local execution. (ApplyDerivation has no `at` -> defaults local.)
+    {
+        std::string at = call.ir_doc.value("node", nlohmann::json::object())
+                             .value("at", std::string("local:"));
+        if (at != "local:" && at != "local" && !at.empty()) {
+            return route_remote(call, at);
+        }
     }
 
     const bool dry_run =

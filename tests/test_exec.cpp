@@ -88,6 +88,21 @@ TEST_CASE("exec Exec IR capture=true returns output as lines") {
     CHECK(found);
 }
 
+TEST_CASE("exec transport rejects an unimplemented at: scheme") {
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::FileQuery);
+    ir["node"] = {{"at", "ssh:"}, {"roots", nlohmann::json::array({"."})}};
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "x";
+    call.cwd = fs::current_path();
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+    CHECK(rr.exit_code != 0);  // ssh transport is not implemented yet
+    CHECK(rr.raw_stderr.find("not implemented") != std::string::npos);
+}
+
 TEST_CASE("exec Exec IR rejects an empty cmd") {
     nlohmann::json ir;
     ir["schema"] = std::string(kuli::ir::SCHEMA);

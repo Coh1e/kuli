@@ -190,6 +190,12 @@ int main(int argc, char** argv) {
     if (noun == "bp") return run_bp(sub);
     if (noun == "generation") return run_generation(sub);
     if (noun == "scripture") return run_scripture(sub);
+    if (noun == "run-ir") {  // agent entry point: execute an IR doc from a file
+        if (sub.empty()) {
+            return report(kuli::diag::Diagnostic::error("run-ir needs an IR file path", "E0001"));
+        }
+        return kuli::bp::run_ir(sub[0], fs::current_path());
+    }
 
     // Basename sugar: `kuli <basename> ...` for a built-in or installed scripture
     // (nouns take precedence, so this never shadows a real subcommand).
