@@ -95,36 +95,63 @@ RawResult fail(int code, const kuli::diag::Diagnostic& d, const std::string& ses
     return r;
 }
 
-// Transport seed (§ transport): execute an IR whose node targets a non-local
-// `at:`. The local-subprocess transport rewrites the target to `local:`, ships
-// the IR to a child `kuli run-ir <tmp>`, and relays its output — the same shape
-// a future ssh transport uses (it would invoke kuli on the far host instead).
-RawResult route_remote(const AdapterCall& call, const std::string& at) {
-    if (at != "local-subprocess:" && at != "subprocess:") {
+// The host registry written by `kuli host add` (~/.config/kuli/hosts.json):
+// alias -> { transport: "ssh"|"local-subprocess", target: "user@host" }.
+nlohmann::json read_hosts() {
+    std::ifstream in(kuli::platform::paths::config_dir() / "hosts.json", std::ios::binary);
+    if (!in) return nlohmann::json::object();
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    auto j = nlohmann::json::parse(ss.str(), nullptr, /*allow_exceptions=*/false);
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+// Transport (§ transport): execute an IR whose node targets a non-local `at:`.
+// The target IR is rewritten to `local:` and shipped (over stdin) to a kuli on
+// the far side — a child process (local-subprocess) or `ssh <host> kuli run-ir -`.
+// `@alias` resolves through the host registry. Output is relayed back.
+RawResult route_remote(const AdapterCall& call, std::string at) {
+    if (!at.empty() && at[0] == '@') {  // resolve a host alias
+        std::string alias = at.substr(1);
+        nlohmann::json hosts = read_hosts();
+        if (!hosts.contains(alias)) {
+            return fail(2,
+                        kuli::diag::Diagnostic::error("unknown host alias '@" + alias + "'", "E0644")
+                            .with_help("register it: kuli host add " + alias + " <user@host>"),
+                        "");
+        }
+        std::string transport = hosts[alias].value("transport", std::string("ssh"));
+        std::string target = hosts[alias].value("target", std::string());
+        at = (transport == "local-subprocess") ? "local-subprocess:" : ("ssh:" + target);
+    }
+
+    std::vector<std::string> spawn;
+    if (at == "local-subprocess:" || at == "subprocess:") {
+        spawn = {kuli::platform::paths::current_exe().string(), "run-ir", "-"};
+    } else if (at.rfind("ssh:", 0) == 0) {
+        std::string target = at.substr(4);
+        if (target.empty()) {
+            return fail(2, kuli::diag::Diagnostic::error("ssh: needs a target (ssh:user@host)",
+                                                         "E0643"),
+                        "");
+        }
+        spawn = {"ssh", target, "kuli", "run-ir", "-"};  // assumes kuli on the remote PATH
+    } else {
         return fail(2,
                     kuli::diag::Diagnostic::error("transport for at: '" + at + "' not implemented yet",
                                                   "E0640")
-                        .with_help("supported now: local: (in-process), local-subprocess:"),
+                        .with_help("supported: local:, local-subprocess:, ssh:<target>, @alias"),
                     "");
     }
+
     nlohmann::json ir = call.ir_doc;
-    ir["node"]["at"] = "local:";  // the child runs it locally
-
-    fs::path tmp = fs::temp_directory_path() /
-                   ("kuli-ir-" + std::to_string(reinterpret_cast<std::uintptr_t>(&call)) + ".json");
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) return fail(1, kuli::diag::Diagnostic::error("cannot stage IR for transport", "E0642"), "");
-        out << ir.dump();
-    }
-    fs::path self = kuli::platform::paths::current_exe();
+    ir["node"]["at"] = "local:";  // the far side runs it locally
     kuli::platform::ProcessResult pr =
-        kuli::platform::run_process({self.string(), "run-ir", tmp.string()}, call.cwd, /*capture=*/true);
-    std::error_code ec;
-    fs::remove(tmp, ec);
-
+        kuli::platform::run_process(spawn, call.cwd, /*capture=*/true, /*input=*/ir.dump());
     if (!pr.launched) {
-        return fail(127, kuli::diag::Diagnostic::error("failed to spawn local subprocess", "E0641"), "");
+        return fail(127,
+                    kuli::diag::Diagnostic::error("failed to spawn transport: " + spawn[0], "E0641"),
+                    "");
     }
     RawResult r;
     r.exit_code = pr.exit_code;

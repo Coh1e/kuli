@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kuli/bp/apply.hpp"
+#include "kuli/bp/hosts.hpp"
 #include "kuli/bp/scripture.hpp"
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/platform/host.hpp"
@@ -125,6 +126,27 @@ int run_generation(const std::vector<std::string>& args) {
     return kuli::bp::generation_list();  // ls or bare
 }
 
+// `kuli host ...` — transport aliases used by @<name> in an IR node's `at:`.
+int run_host(const std::vector<std::string>& args) {
+    CLI::App app{"kuli host — transport aliases for @<name>"};
+    app.require_subcommand(0, 1);
+    std::string add_alias, add_target, add_transport;
+    auto* add = app.add_subcommand("add", "Register a host alias");
+    add->add_option("alias", add_alias, "Alias (referenced as @alias)")->required();
+    add->add_option("target", add_target, "ssh target user@host (omit for local-subprocess)");
+    add->add_option("--transport", add_transport, "ssh | local-subprocess")->default_val("ssh");
+    std::string rm_alias;
+    auto* rm = app.add_subcommand("rm", "Remove a host alias");
+    rm->add_option("alias", rm_alias, "Alias")->required();
+    app.add_subcommand("ls", "List host aliases");
+
+    KULI_PARSE(app, args);
+
+    if (*add) return kuli::bp::host_add(add_alias, add_target, add_transport);
+    if (*rm) return kuli::bp::host_remove(rm_alias);
+    return kuli::bp::host_list();  // ls or bare
+}
+
 // `kuli scripture ...` — install / uninstall / list scriptures. Built-ins
 // (find / grep) install additively; third-party packages also install via
 // `kuli bp apply <scripture-blueprint>` (the unified derivation interface, §8.2.10).
@@ -190,6 +212,7 @@ int main(int argc, char** argv) {
     if (noun == "bp") return run_bp(sub);
     if (noun == "generation") return run_generation(sub);
     if (noun == "scripture") return run_scripture(sub);
+    if (noun == "host") return run_host(sub);
     if (noun == "run-ir") {  // agent entry point: execute an IR doc from a file
         if (sub.empty()) {
             return report(kuli::diag::Diagnostic::error("run-ir needs an IR file path", "E0001"));
@@ -204,5 +227,6 @@ int main(int argc, char** argv) {
     }
 
     return report(kuli::diag::Diagnostic::error("unknown command: " + noun, "E0001")
-                      .with_help("try `kuli bp`, `kuli generation`, `kuli scripture`, or `kuli version`"));
+                      .with_help("try `kuli bp`, `kuli generation`, `kuli scripture`, "
+                                 "`kuli host`, or `kuli version`"));
 }

@@ -23,8 +23,10 @@ struct ProcessResult {
 // (if non-empty) is the child's working directory. argv must be non-empty.
 // When `capture` is true the child's stdout+stderr are redirected to a temp
 // file and returned in `output` (deadlock-free, no pipe draining); otherwise
-// stdio is inherited and streams straight to the terminal.
+// stdio is inherited and streams straight to the terminal. When `input` is
+// non-empty it is fed to the child's stdin (via a temp file) — e.g. piping an
+// IR document to `kuli run-ir -`.
 ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& cwd = {},
-                          bool capture = false);
+                          bool capture = false, const std::string& input = {});
 
 }  // namespace kuli::platform

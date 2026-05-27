@@ -121,17 +121,25 @@ int explain(const std::string& spec) {
 }
 
 int run_ir(const fs::path& file, const fs::path& cwd) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
-        return report_eval_error(kuli::diag::Diagnostic::error(
-            "cannot read IR file: " + file.string(), "E0630"));
+    std::string text;
+    if (file.string() == "-") {  // read the IR from stdin (the transport interface)
+        std::ostringstream ss;
+        ss << std::cin.rdbuf();
+        text = ss.str();
+    } else {
+        std::ifstream in(file, std::ios::binary);
+        if (!in) {
+            return report_eval_error(kuli::diag::Diagnostic::error(
+                "cannot read IR file: " + file.string(), "E0630"));
+        }
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        text = ss.str();
     }
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    nlohmann::json doc = nlohmann::json::parse(ss.str(), nullptr, /*allow_exceptions=*/false);
+    nlohmann::json doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (doc.is_discarded()) {
         return report_eval_error(
-            kuli::diag::Diagnostic::error("IR file is not valid JSON: " + file.string(), "E0631"));
+            kuli::diag::Diagnostic::error("IR input is not valid JSON", "E0631"));
     }
     return run_engine(doc, cwd);
 }

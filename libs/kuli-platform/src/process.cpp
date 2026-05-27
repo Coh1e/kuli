@@ -18,13 +18,13 @@ namespace kuli::platform {
 
 namespace {
 
-// A unique temp path for capturing a child's stdout+stderr (a file avoids the
-// pipe-buffer deadlock you'd get without a concurrent drain thread).
-fs::path capture_temp() {
+// A unique temp path for staging a child's stdin / capturing its stdout+stderr
+// (a file avoids the pipe-buffer deadlock you'd get without a drain thread).
+fs::path scratch_temp(const char* tag) {
     static std::atomic<unsigned> ctr{0};
     auto t = std::chrono::steady_clock::now().time_since_epoch().count();
     std::ostringstream name;
-    name << "kuli-exec-" << t << "-" << ctr.fetch_add(1) << ".out";
+    name << "kuli-" << tag << "-" << t << "-" << ctr.fetch_add(1) << ".tmp";
     return fs::temp_directory_path() / name.str();
 }
 
@@ -33,6 +33,12 @@ std::string slurp(const fs::path& p) {
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+void remove_quiet(const fs::path& p) {
+    if (p.empty()) return;
+    std::error_code ec;
+    fs::remove(p, ec);
 }
 
 #if defined(_WIN32)
@@ -73,10 +79,19 @@ std::wstring quote_arg(const std::wstring& a) {
 
 }  // namespace
 
-ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& cwd, bool capture) {
+ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& cwd, bool capture,
+                          const std::string& input) {
     ProcessResult r;
     if (argv.empty()) return r;
-    fs::path tmp = capture ? capture_temp() : fs::path{};
+
+    fs::path out_tmp = capture ? scratch_temp("out") : fs::path{};
+    fs::path in_tmp;
+    if (!input.empty()) {
+        in_tmp = scratch_temp("in");
+        std::ofstream o(in_tmp, std::ios::binary | std::ios::trunc);
+        o << input;
+    }
+    bool use_handles = capture || !input.empty();
 
 #if defined(_WIN32)
     std::wstring cmdline;
@@ -85,36 +100,46 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
         cmdline += quote_arg(widen(argv[i]));
     }
     std::vector<wchar_t> mutable_cmd(cmdline.begin(), cmdline.end());
-    mutable_cmd.push_back(L'\0');  // CreateProcessW needs a writable buffer
+    mutable_cmd.push_back(L'\0');
     std::wstring wcwd = cwd.empty() ? std::wstring() : cwd.wstring();
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    HANDLE hout = INVALID_HANDLE_VALUE;
+    HANDLE hin = INVALID_HANDLE_VALUE, hout = INVALID_HANDLE_VALUE;
     BOOL inherit = FALSE;
-    if (capture) {
+    if (use_handles) {
         SECURITY_ATTRIBUTES sa{};
         sa.nLength = sizeof(sa);
         sa.bInheritHandle = TRUE;
-        hout = CreateFileW(tmp.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
-        if (hout == INVALID_HANDLE_VALUE) return r;
         si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdOutput = hout;
-        si.hStdError = hout;
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        if (!input.empty()) {
+            hin = CreateFileW(in_tmp.wstring().c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+            si.hStdInput = hin;
+        } else {
+            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        }
+        if (capture) {
+            hout = CreateFileW(out_tmp.wstring().c_str(), GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_TEMPORARY, nullptr);
+            si.hStdOutput = hout;
+            si.hStdError = hout;
+        } else {
+            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        }
         inherit = TRUE;
     }
-    // No creation flags: a console child shares our console when not capturing.
     BOOL ok = CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, inherit, 0, nullptr,
                              wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi);
-    if (hout != INVALID_HANDLE_VALUE) CloseHandle(hout);  // child holds its own copy
+    if (hin != INVALID_HANDLE_VALUE) CloseHandle(hin);
+    if (hout != INVALID_HANDLE_VALUE) CloseHandle(hout);
     if (!ok) {
-        if (capture) {
-            std::error_code ec;
-            fs::remove(tmp, ec);
-        }
+        remove_quiet(in_tmp);
+        remove_quiet(out_tmp);
         return r;  // launched = false
     }
     r.launched = true;
@@ -126,11 +151,22 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
     CloseHandle(pi.hThread);
 #else
     pid_t pid = fork();
-    if (pid < 0) return r;  // launched = false
+    if (pid < 0) {
+        remove_quiet(in_tmp);
+        remove_quiet(out_tmp);
+        return r;
+    }
     if (pid == 0) {
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(127);
+        if (!input.empty()) {
+            int fd = open(in_tmp.c_str(), O_RDONLY);
+            if (fd >= 0) {
+                dup2(fd, 0);
+                close(fd);
+            }
+        }
         if (capture) {
-            int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            int fd = open(out_tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
             if (fd < 0) _exit(127);
             dup2(fd, 1);
             dup2(fd, 2);
@@ -141,7 +177,7 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
         for (const auto& a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
         cargv.push_back(nullptr);
         execvp(cargv[0], cargv.data());
-        _exit(127);  // exec failed (command not found)
+        _exit(127);  // exec failed
     }
     r.launched = true;
     int status = 0;
@@ -152,13 +188,12 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
     } else if (WIFSIGNALED(status)) {
         r.exit_code = 128 + WTERMSIG(status);
     }
+    (void)use_handles;
 #endif
 
-    if (capture) {
-        r.output = slurp(tmp);
-        std::error_code ec;
-        fs::remove(tmp, ec);
-    }
+    if (capture) r.output = slurp(out_tmp);
+    remove_quiet(in_tmp);
+    remove_quiet(out_tmp);
     return r;
 }
 
