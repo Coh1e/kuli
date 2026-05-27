@@ -79,11 +79,12 @@ TEST_CASE("generation commit appends and points current (C1/C2 model)") {
     CHECK(gen1.parent == 0);
     p.set_current(1);
     CHECK(p.current_id() == 1);
-    REQUIRE(p.load(1).has_value());
-    CHECK(p.load(1)->set_hash == bp::derivation_set_hash(g1));
+    auto loaded = p.load(1);  // bind to a named value — don't iterate a temporary's member
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->set_hash == bp::derivation_set_hash(g1));
     // the ninja fetch contributed a shim entry
     bool has_ninja_shim = false;
-    for (const auto& d : p.load(1)->derivations)
+    for (const auto& d : loaded->derivations)
         for (const auto& s : d.shims)
             if (s.alias == "ninja") has_ninja_shim = true;
     CHECK(has_ninja_shim);
