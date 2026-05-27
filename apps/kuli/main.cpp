@@ -125,36 +125,40 @@ int run_generation(const std::vector<std::string>& args) {
     return kuli::bp::generation_list();  // ls or bare
 }
 
-// `kuli scripture ...` — built-in basenames only (third-party packages deferred).
+// `kuli scripture ...` — install / uninstall / list scriptures. Built-ins
+// (find / grep) install additively; third-party packages also install via
+// `kuli bp apply <scripture-blueprint>` (the unified derivation interface, §8.2.10).
 int run_scripture(const std::vector<std::string>& args) {
-    CLI::App app{"kuli scripture — built-in basenames"};
+    CLI::App app{"kuli scripture — basename packages"};
     app.require_subcommand(0, 1);
-    app.add_subcommand("ls", "List built-in basenames");
+    app.add_subcommand("ls", "List installed + available scriptures");
     std::string install_name;
-    auto* install = app.add_subcommand("install", "Install a built-in basename shim");
-    install->add_option("name", install_name, "Basename, e.g. kuli-bp")->required();
+    auto* install = app.add_subcommand("install", "Install a built-in scripture (find/grep/kuli-bp)");
+    install->add_option("name", install_name, "find / grep / kuli-bp")->required();
+    std::string uninstall_name;
+    auto* uninstall = app.add_subcommand("uninstall", "Remove an installed scripture");
+    uninstall->add_option("name", uninstall_name, "Scripture name")->required();
 
     KULI_PARSE(app, args);
 
     if (*install) {
-        // `scripture install` registers a *built-in* basename. Third-party
-        // scripture packages install via `kuli bp apply <scripture-blueprint>`
-        // (the unified derivation interface, §8.2.10).
-        if (!is_known_basename(install_name)) {
-            return report(kuli::diag::Diagnostic::error(
-                              "unknown built-in basename: " + install_name, "E0900")
-                              .with_help("third-party scriptures install via `kuli bp apply`"));
+        // kuli-bp is the built-in bp *router* basename (a shim, not a store
+        // scripture); find/grep are real bundled scriptures.
+        if (install_name == "kuli-bp") {
+            fs::path bin = kuli::platform::paths::xdg_bin_home();
+            if (!kuli::platform::write_basename_shim(bin, "kuli-bp",
+                                                     kuli::platform::paths::current_exe())) {
+                return report(kuli::diag::Diagnostic::error(
+                    "cannot write basename shim for kuli-bp", "E0901"));
+            }
+            std::cout << "installed basename 'kuli-bp' -> " << bin.string() << "\n";
+            return 0;
         }
-        fs::path bin = kuli::platform::paths::xdg_bin_home();
-        if (!kuli::platform::write_basename_shim(bin, install_name,
-                                                 kuli::platform::paths::current_exe())) {
-            return report(kuli::diag::Diagnostic::error(
-                "cannot write basename shim for " + install_name, "E0901"));
-        }
-        std::cout << "installed basename '" << install_name << "' -> " << bin.string() << "\n";
-        return 0;
+        return kuli::bp::install_builtin_scripture(install_name);
     }
-    std::cout << "kuli-bp  (built-in)\n";  // ls: built-in first, then installed scriptures
+    if (*uninstall) return kuli::bp::uninstall_scripture(uninstall_name);
+
+    std::cout << "kuli-bp  (built-in router)\n";  // ls
     return kuli::bp::scripture_list();
 }
 

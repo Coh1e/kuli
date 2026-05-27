@@ -22,8 +22,19 @@ bool is_installed_basename(const std::string& basename);
 int run_basename(const std::string& basename, const std::vector<std::string>& argv,
                  const fs::path& cwd);
 
-// `kuli scripture ls` — list scriptures installed by the current generation and
-// the basenames they provide. Returns 0.
+// `kuli scripture ls` — list installed scriptures (registry + current
+// generation) and the basenames they provide. Returns 0.
 int scripture_list();
+
+// The scriptures bundled with kuli (e.g. "find", "grep").
+std::vector<std::string> builtin_scripture_names();
+
+// `kuli scripture install <name>` for a built-in: realize it into the store,
+// write its basename shims, and record it in the scripture registry (additive —
+// installing one does not remove another). Returns the exit code.
+int install_builtin_scripture(const std::string& name);
+
+// `kuli scripture uninstall <name>`: remove its basename shims + registry entry.
+int uninstall_scripture(const std::string& name);
 
 }  // namespace kuli::bp
