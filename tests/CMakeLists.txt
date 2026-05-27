@@ -21,6 +21,7 @@ add_executable(kuli-tests
     test_sense.cpp
     test_exec.cpp
     test_meshell.cpp
+    test_capability.cpp
     test_rollback.cpp
     test_resolver.cpp
     test_source.cpp
@@ -62,6 +63,7 @@ add_test(NAME scripture COMMAND kuli-tests --test-case=scripture*)
 add_test(NAME sense COMMAND kuli-tests --test-case=sense*)
 add_test(NAME exec COMMAND kuli-tests --test-case=exec*)
 add_test(NAME meshell COMMAND kuli-tests --test-case=meshell*)
+add_test(NAME capability COMMAND kuli-tests --test-case=capability*)
 add_test(NAME rollback COMMAND kuli-tests --test-case=rollback*)
 add_test(NAME resolver COMMAND kuli-tests --test-case=resolver*)
 add_test(NAME source COMMAND kuli-tests --test-case=source*)

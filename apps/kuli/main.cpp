@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kuli/bp/apply.hpp"
+#include "kuli/bp/capability.hpp"
 #include "kuli/bp/hosts.hpp"
 #include "kuli/bp/meshell.hpp"
 #include "kuli/bp/scripture.hpp"
@@ -127,6 +128,49 @@ int run_generation(const std::vector<std::string>& args) {
     return kuli::bp::generation_list();  // ls or bare
 }
 
+// `kuli capability ...` — this node's record + the peer capability cache.
+int run_capability(const std::vector<std::string>& args) {
+    CLI::App app{"kuli capability — node capability record + peer cache"};
+    bool as_json = false;
+    app.add_flag("--json", as_json, "Emit the record as JSON");
+    app.require_subcommand(0, 1);
+    std::string sync_alias;
+    auto* sync = app.add_subcommand("sync", "Pull + cache a peer's capability (over the transport)");
+    sync->add_option("alias", sync_alias, "Host alias")->required();
+    auto* ls = app.add_subcommand("ls", "List the local + cached records");
+
+    KULI_PARSE(app, args);
+
+    if (*sync) return kuli::bp::capability_sync(sync_alias);
+    if (*ls) return kuli::bp::capability_list();
+    return kuli::bp::capability_show(as_json);
+}
+
+// `kuli route --need <c>... [--fallback fail|local] -- <cmd...>`. Parsed by hand
+// (everything after `--` is the verbatim command — more robust than CLI11's
+// positional/`--` interaction for a trailing argv).
+int run_route(const std::vector<std::string>& args) {
+    std::vector<std::string> need, cmd;
+    std::string fallback = "fail";
+    bool in_cmd = false;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (in_cmd) {
+            cmd.push_back(args[i]);
+        } else if (args[i] == "--") {
+            in_cmd = true;
+        } else if (args[i] == "--need" && i + 1 < args.size()) {
+            need.push_back(args[++i]);
+        } else if (args[i] == "--fallback" && i + 1 < args.size()) {
+            fallback = args[++i];
+        } else {
+            return report(kuli::diag::Diagnostic::error(
+                              "unexpected route argument: " + args[i], "E0001")
+                              .with_help("usage: kuli route --need <c>... [--fallback fail|local] -- <cmd...>"));
+        }
+    }
+    return kuli::bp::route(need, fallback, cmd, fs::current_path());
+}
+
 // `kuli host ...` — transport aliases used by @<name> in an IR node's `at:`.
 int run_host(const std::vector<std::string>& args) {
     CLI::App app{"kuli host — transport aliases for @<name>"};
@@ -228,6 +272,8 @@ int main(int argc, char** argv) {
     if (noun == "generation") return run_generation(sub);
     if (noun == "scripture") return run_scripture(sub);
     if (noun == "host") return run_host(sub);
+    if (noun == "capability") return run_capability(sub);
+    if (noun == "route") return run_route(sub);
     if (noun == "mesh") {  // `kuli mesh "<@a:cmd | @b:cmd>"`
         std::string line;
         for (std::size_t i = 0; i < sub.size(); ++i) line += (i ? " " : "") + sub[i];
@@ -248,5 +294,5 @@ int main(int argc, char** argv) {
 
     return report(kuli::diag::Diagnostic::error("unknown command: " + noun, "E0001")
                       .with_help("try `kuli bp`, `kuli generation`, `kuli scripture`, "
-                                 "`kuli host`, or `kuli version`"));
+                                 "`kuli host`, `kuli capability`, `kuli route`, or `kuli version`"));
 }
