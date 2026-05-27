@@ -153,6 +153,25 @@ std::expected<void, Diagnostic> validate_text_search(const json& node) {
     return {};
 }
 
+// ProcessQuery / HostFacts share a tiny shape: an object with an optional `at`
+// URI. ProcessQuery additionally allows a `name` glob array + numeric `pid`.
+std::expected<void, Diagnostic> validate_simple_read(const json& node, const char* what,
+                                                     bool allow_name) {
+    if (!node.is_object()) {
+        return std::unexpected(invalid(std::string(what) + ".node must be an object"));
+    }
+    if (node.contains("at") && !node["at"].is_string()) {
+        return std::unexpected(invalid(std::string(what) + ".node.at must be a string URI"));
+    }
+    if (allow_name && node.contains("name") && !node["name"].is_array()) {
+        return std::unexpected(invalid(std::string(what) + ".node.name must be an array of globs"));
+    }
+    if (allow_name && node.contains("pid") && !node["pid"].is_number_integer()) {
+        return std::unexpected(invalid(std::string(what) + ".node.pid must be an integer"));
+    }
+    return {};
+}
+
 }  // namespace
 
 std::expected<void, Diagnostic> validate(const json& doc) {
@@ -167,6 +186,8 @@ std::expected<void, Diagnostic> validate(const json& doc) {
     if (k == kind::ApplyDerivation) return validate_apply_derivation(doc["node"]);
     if (k == kind::FileQuery) return validate_file_query(doc["node"]);
     if (k == kind::TextSearch) return validate_text_search(doc["node"]);
+    if (k == kind::ProcessQuery) return validate_simple_read(doc["node"], "ProcessQuery", true);
+    if (k == kind::HostFacts) return validate_simple_read(doc["node"], "HostFacts", false);
     // Other kinds are declared but not yet validated in depth.
     if (k == kind::EnvSet || k == kind::FileOp || k == kind::Exec) return {};
     return std::unexpected(invalid("unknown IR kind '" + k + "'"));

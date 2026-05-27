@@ -15,6 +15,7 @@
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/ir/ir.hpp"
 #include "kuli/platform/paths.hpp"
+#include "kuli/sense/sense.hpp"
 #include "kuli/store/store.hpp"
 
 namespace kuli::engine {
@@ -243,6 +244,60 @@ RawResult execute_text_search(const json& node, const fs::path& cwd) {
     return r;
 }
 
+bool local_at(const json& node) {
+    std::string at = node.value("at", std::string("local:"));
+    return at == "local:" || at == "local";
+}
+
+// ProcessQuery (§4.4): ps-style — list processes (native via kuli-sense),
+// optionally filtered by a `pid` or name globs. Output "<pid>\t<name>",
+// sorted by pid.
+RawResult execute_process_query(const json& node, const fs::path& /*cwd*/) {
+    if (!local_at(node)) {
+        return fail(2,
+                    kuli::diag::Diagnostic::error("ProcessQuery is local-only for now", "E0610"),
+                    "");
+    }
+    std::vector<std::string> names;
+    for (const auto& g : node.value("name", json::array())) {
+        if (g.is_string()) names.push_back(g.get<std::string>());
+    }
+    long want_pid = node.value("pid", 0);
+
+    std::vector<kuli::sense::ProcessInfo> procs = kuli::sense::list_processes();
+    std::sort(procs.begin(), procs.end(),
+              [](const auto& a, const auto& b) { return a.pid < b.pid; });
+
+    RawResult r;
+    for (const auto& p : procs) {
+        if (want_pid != 0 && p.pid != want_pid) continue;
+        if (!names.empty()) {
+            bool hit = false;
+            for (const auto& g : names) {
+                if (glob_match(g, p.name)) { hit = true; break; }
+            }
+            if (!hit) continue;
+        }
+        r.lines.push_back(std::to_string(p.pid) + "\t" + p.name);
+    }
+    return r;
+}
+
+// HostFacts (§4.4): a one-shot host summary (os / arch / hostname / cpu).
+RawResult execute_host_facts(const json& node, const fs::path& /*cwd*/) {
+    if (!local_at(node)) {
+        return fail(2, kuli::diag::Diagnostic::error("HostFacts is local-only for now", "E0611"),
+                    "");
+    }
+    kuli::sense::HostFacts f = kuli::sense::host_facts();
+    RawResult r;
+    r.lines.push_back("os: " + f.os);
+    r.lines.push_back("arch: " + f.arch);
+    r.lines.push_back("hostname: " + f.hostname);
+    r.lines.push_back("cpu: " + std::to_string(f.cpu_count));
+    return r;
+}
+
 }  // namespace
 
 ExecEnv default_exec_env() {
@@ -268,6 +323,12 @@ RawResult Engine::execute(const AdapterCall& call) {
     }
     if (ir_kind == std::string(kuli::ir::kind::TextSearch)) {
         return execute_text_search(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
+    }
+    if (ir_kind == std::string(kuli::ir::kind::ProcessQuery)) {
+        return execute_process_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
+    }
+    if (ir_kind == std::string(kuli::ir::kind::HostFacts)) {
+        return execute_host_facts(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
     }
 
     const bool dry_run =

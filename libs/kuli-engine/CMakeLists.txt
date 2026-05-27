@@ -8,4 +8,4 @@ target_include_directories(kuli-engine PUBLIC include)
 target_compile_features(kuli-engine PUBLIC cxx_std_23)
 target_link_libraries(kuli-engine
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE kuli::ir kuli::diag kuli::store kuli::platform kuli-build-flags)
+    PRIVATE kuli::ir kuli::diag kuli::store kuli::platform kuli::sense kuli-build-flags)
