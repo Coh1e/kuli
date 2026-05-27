@@ -172,6 +172,23 @@ std::expected<void, Diagnostic> validate_simple_read(const json& node, const cha
     return {};
 }
 
+std::expected<void, Diagnostic> validate_exec(const json& node) {
+    if (!node.is_object()) return std::unexpected(invalid("Exec.node must be an object"));
+    if (node.contains("at") && !node["at"].is_string()) {
+        return std::unexpected(invalid("Exec.node.at must be a string URI"));
+    }
+    if (!node.contains("cmd") || !node["cmd"].is_array() || node["cmd"].empty()) {
+        return std::unexpected(invalid("Exec.node.cmd must be a non-empty argv array"));
+    }
+    for (const auto& a : node["cmd"]) {
+        if (!a.is_string()) return std::unexpected(invalid("Exec.node.cmd entries must be strings"));
+    }
+    if (node.contains("cwd") && !node["cwd"].is_string()) {
+        return std::unexpected(invalid("Exec.node.cwd must be a string"));
+    }
+    return {};
+}
+
 }  // namespace
 
 std::expected<void, Diagnostic> validate(const json& doc) {
@@ -189,8 +206,9 @@ std::expected<void, Diagnostic> validate(const json& doc) {
     if (k == kind::ProcessQuery) return validate_simple_read(doc["node"], "ProcessQuery", true);
     if (k == kind::HostFacts) return validate_simple_read(doc["node"], "HostFacts", false);
     if (k == kind::EnvQuery) return validate_simple_read(doc["node"], "EnvQuery", true);
+    if (k == kind::Exec) return validate_exec(doc["node"]);
     // Other kinds are declared but not yet validated in depth.
-    if (k == kind::EnvSet || k == kind::FileOp || k == kind::Exec) return {};
+    if (k == kind::EnvSet || k == kind::FileOp) return {};
     return std::unexpected(invalid("unknown IR kind '" + k + "'"));
 }
 

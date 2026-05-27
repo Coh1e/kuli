@@ -5,6 +5,7 @@ add_library(kuli-platform STATIC
     src/paths.cpp
     src/env.cpp
     src/win_env.cpp
+    src/process.cpp
     src/shim.cpp)
 add_library(kuli::platform ALIAS kuli-platform)
 

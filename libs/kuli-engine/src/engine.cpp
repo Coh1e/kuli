@@ -15,6 +15,7 @@
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/ir/ir.hpp"
 #include "kuli/platform/paths.hpp"
+#include "kuli/platform/process.hpp"
 #include "kuli/sense/sense.hpp"
 #include "kuli/store/store.hpp"
 
@@ -298,6 +299,47 @@ RawResult execute_host_facts(const json& node, const fs::path& /*cwd*/) {
     return r;
 }
 
+// Exec (§4.4): run a command at `at:` with stdio streamed back. Local-only for
+// now (native blocking spawn via kuli-platform); --dry-run reports without
+// running. The child's output goes straight to the terminal; only the exit code
+// flows through RawResult.
+RawResult execute_exec(const json& node, const fs::path& cwd, bool dry_run) {
+    if (!local_at(node)) {
+        return fail(2, kuli::diag::Diagnostic::error("Exec is local-only for now", "E0620"), "");
+    }
+    std::vector<std::string> argv;
+    for (const auto& a : node.value("cmd", json::array())) {
+        if (a.is_string()) argv.push_back(a.get<std::string>());
+    }
+    if (argv.empty()) {
+        return fail(2, kuli::diag::Diagnostic::error("Exec.node.cmd is empty", "E0621"), "");
+    }
+    fs::path run_cwd = cwd;
+    if (node.contains("cwd") && node["cwd"].is_string()) {
+        fs::path c = node["cwd"].get<std::string>();
+        run_cwd = c.is_relative() ? cwd / c : c;
+    }
+
+    if (dry_run) {
+        std::string joined;
+        for (const auto& a : argv) joined += (joined.empty() ? "" : " ") + a;
+        RawResult r;
+        r.lines.push_back("dry-run: would exec: " + joined);
+        return r;
+    }
+
+    kuli::platform::ProcessResult pr = kuli::platform::run_process(argv, run_cwd);
+    if (!pr.launched) {
+        return fail(127,
+                    kuli::diag::Diagnostic::error("failed to launch: " + argv[0], "E0622")
+                        .with_help("is it on PATH?"),
+                    "");
+    }
+    RawResult r;
+    r.exit_code = pr.exit_code;  // stdout/stderr already streamed to the terminal
+    return r;
+}
+
 // EnvQuery (§4.4): read the process environment, optionally filtered by name
 // globs; emit "KEY=VALUE" sorted by name.
 RawResult execute_env_query(const json& node, const fs::path& /*cwd*/) {
@@ -344,27 +386,19 @@ RawResult Engine::execute(const AdapterCall& call) {
         return fail(kuli::diag::exit_code_of(v.error()), v.error(), "");
     }
 
-    // Flat read IRs short-circuit here — no plan expansion, no evidence session
-    // (they are side-effect-free).
-    std::string ir_kind = call.ir_doc.value("kind", std::string{});
-    if (ir_kind == std::string(kuli::ir::kind::FileQuery)) {
-        return execute_file_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
-    }
-    if (ir_kind == std::string(kuli::ir::kind::TextSearch)) {
-        return execute_text_search(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
-    }
-    if (ir_kind == std::string(kuli::ir::kind::ProcessQuery)) {
-        return execute_process_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
-    }
-    if (ir_kind == std::string(kuli::ir::kind::HostFacts)) {
-        return execute_host_facts(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
-    }
-    if (ir_kind == std::string(kuli::ir::kind::EnvQuery)) {
-        return execute_env_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
-    }
-
     const bool dry_run =
         call.ir_doc.value("options", nlohmann::json::object()).value("dry_run", false);
+
+    // Flat IRs short-circuit here — no plan expansion, no evidence session. Reads
+    // are side-effect-free (dry_run is a no-op for them); Exec honors dry_run.
+    std::string ir_kind = call.ir_doc.value("kind", std::string{});
+    auto node_of = [&] { return call.ir_doc.value("node", nlohmann::json::object()); };
+    if (ir_kind == std::string(kuli::ir::kind::FileQuery)) return execute_file_query(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::TextSearch)) return execute_text_search(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::ProcessQuery)) return execute_process_query(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::HostFacts)) return execute_host_facts(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::EnvQuery)) return execute_env_query(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::Exec)) return execute_exec(node_of(), call.cwd, dry_run);
 
     // 2) Open an evidence session under the invocation cwd.
     std::string id = new_session_id();

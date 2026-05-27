@@ -19,6 +19,7 @@ add_executable(kuli-tests
     test_generation.cpp
     test_scripture.cpp
     test_sense.cpp
+    test_exec.cpp
     test_rollback.cpp
     test_resolver.cpp
     test_source.cpp
@@ -58,6 +59,7 @@ add_test(NAME engine_realize COMMAND kuli-tests --test-case=engine_realize*)
 add_test(NAME generation COMMAND kuli-tests --test-case=generation*)
 add_test(NAME scripture COMMAND kuli-tests --test-case=scripture*)
 add_test(NAME sense COMMAND kuli-tests --test-case=sense*)
+add_test(NAME exec COMMAND kuli-tests --test-case=exec*)
 add_test(NAME rollback COMMAND kuli-tests --test-case=rollback*)
 add_test(NAME resolver COMMAND kuli-tests --test-case=resolver*)
 add_test(NAME source COMMAND kuli-tests --test-case=source*)
