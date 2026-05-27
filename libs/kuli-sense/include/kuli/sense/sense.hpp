@@ -5,6 +5,7 @@
 // Feeds the read IRs ProcessQuery + HostFacts (NetworkQuery / HandleQuery later).
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kuli::sense {
@@ -26,5 +27,8 @@ struct HostFacts {
 };
 
 HostFacts host_facts();
+
+// The process environment as (name, value) pairs (unsorted; caller sorts).
+std::vector<std::pair<std::string, std::string>> env_vars();
 
 }  // namespace kuli::sense

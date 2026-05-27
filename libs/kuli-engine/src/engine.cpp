@@ -298,6 +298,35 @@ RawResult execute_host_facts(const json& node, const fs::path& /*cwd*/) {
     return r;
 }
 
+// EnvQuery (§4.4): read the process environment, optionally filtered by name
+// globs; emit "KEY=VALUE" sorted by name.
+RawResult execute_env_query(const json& node, const fs::path& /*cwd*/) {
+    if (!local_at(node)) {
+        return fail(2, kuli::diag::Diagnostic::error("EnvQuery is local-only for now", "E0612"),
+                    "");
+    }
+    std::vector<std::string> names;
+    for (const auto& g : node.value("name", json::array())) {
+        if (g.is_string()) names.push_back(g.get<std::string>());
+    }
+    auto vars = kuli::sense::env_vars();
+    std::sort(vars.begin(), vars.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    RawResult r;
+    for (const auto& [k, v] : vars) {
+        if (!names.empty()) {
+            bool hit = false;
+            for (const auto& g : names) {
+                if (glob_match(g, k)) { hit = true; break; }
+            }
+            if (!hit) continue;
+        }
+        r.lines.push_back(k + "=" + v);
+    }
+    return r;
+}
+
 }  // namespace
 
 ExecEnv default_exec_env() {
@@ -329,6 +358,9 @@ RawResult Engine::execute(const AdapterCall& call) {
     }
     if (ir_kind == std::string(kuli::ir::kind::HostFacts)) {
         return execute_host_facts(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
+    }
+    if (ir_kind == std::string(kuli::ir::kind::EnvQuery)) {
+        return execute_env_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
     }
 
     const bool dry_run =

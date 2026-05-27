@@ -21,6 +21,12 @@
 #include <sys/proc.h>
 #endif
 
+#if !defined(_WIN32)
+// Available to the main executable (kuli-sense is statically linked into it;
+// the dylib-only restriction that would need _NSGetEnviron does not apply).
+extern "C" char** environ;
+#endif
+
 namespace kuli::sense {
 
 namespace {
@@ -126,6 +132,34 @@ HostFacts host_facts() {
     }
 #endif
     return f;
+}
+
+std::vector<std::pair<std::string, std::string>> env_vars() {
+    std::vector<std::pair<std::string, std::string>> out;
+#if defined(_WIN32)
+    LPWCH block = GetEnvironmentStringsW();
+    if (!block) return out;
+    for (LPWCH p = block; *p;) {
+        std::wstring entry = p;
+        p += entry.size() + 1;
+        std::string e = narrow(entry.c_str());
+        if (e.empty() || e[0] == '=') continue;  // skip "=C:=..." drive entries
+        auto eq = e.find('=');
+        if (eq == std::string::npos) continue;
+        out.emplace_back(e.substr(0, eq), e.substr(eq + 1));
+    }
+    FreeEnvironmentStringsW(block);
+#else
+    if (environ) {
+        for (char** ep = environ; *ep; ++ep) {
+            std::string e = *ep;
+            auto eq = e.find('=');
+            if (eq == std::string::npos) continue;
+            out.emplace_back(e.substr(0, eq), e.substr(eq + 1));
+        }
+    }
+#endif
+    return out;
 }
 
 }  // namespace kuli::sense

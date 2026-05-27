@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -64,4 +65,26 @@ TEST_CASE("sense ProcessQuery IR lists processes as pid<TAB>name") {
     CHECK(rr.exit_code == 0);
     REQUIRE_FALSE(rr.lines.empty());
     CHECK(rr.lines[0].find('\t') != std::string::npos);
+}
+
+TEST_CASE("sense EnvQuery IR reads the environment, filtered by name glob") {
+#if defined(_WIN32)
+    _putenv_s("KULI_TEST_VAR", "hello");
+#else
+    setenv("KULI_TEST_VAR", "hello", 1);
+#endif
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::EnvQuery);
+    ir["node"] = {{"name", nlohmann::json::array({"KULI_TEST*"})}};
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "kenv";
+    call.cwd = fs::current_path();
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+
+    CHECK(rr.exit_code == 0);
+    REQUIRE(rr.lines.size() == 1);  // only the glob-matching var
+    CHECK(rr.lines[0] == "KULI_TEST_VAR=hello");
 }

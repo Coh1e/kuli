@@ -188,6 +188,7 @@ std::expected<void, Diagnostic> validate(const json& doc) {
     if (k == kind::TextSearch) return validate_text_search(doc["node"]);
     if (k == kind::ProcessQuery) return validate_simple_read(doc["node"], "ProcessQuery", true);
     if (k == kind::HostFacts) return validate_simple_read(doc["node"], "HostFacts", false);
+    if (k == kind::EnvQuery) return validate_simple_read(doc["node"], "EnvQuery", true);
     // Other kinds are declared but not yet validated in depth.
     if (k == kind::EnvSet || k == kind::FileOp || k == kind::Exec) return {};
     return std::unexpected(invalid("unknown IR kind '" + k + "'"));
