@@ -67,4 +67,24 @@ struct EvalResult {
 // Diagnostic whose `kind` the caller maps to an exit code (sandbox→3, etc.).
 std::expected<EvalResult, kuli::diag::Diagnostic> evaluate(const EvalRequest& req);
 
+// ----- scripture adapter execution (§9.2) ----------------------------------
+// Running an installed scripture basename: load its adapter .luau from the
+// store and call `function(ctx)` with ctx.argv = the command-line arguments.
+// Same sandbox as a blueprint (R-NF-03); ctx.lib.readResource reads files under
+// the scripture's own store path. The adapter returns a result the engine
+// renders. v0 supports the pure form `{ lines = { "..." } }`.
+struct AdapterRequest {
+    std::filesystem::path adapter_path;    // the adapter .luau inside the store
+    std::filesystem::path scripture_root;  // the scripture store path (readResource base)
+    std::vector<std::string> argv;         // args after the basename
+    SystemInfo system;
+    EvalLimits limits;
+};
+
+struct AdapterResult {
+    std::vector<std::string> lines;  // text the engine prints verbatim
+};
+
+std::expected<AdapterResult, kuli::diag::Diagnostic> evaluate_adapter(const AdapterRequest& req);
+
 }  // namespace kuli::luau

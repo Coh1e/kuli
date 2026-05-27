@@ -65,6 +65,13 @@ json expand_plan(const json& ir) {
             }
         } else if (builder == "withFiles") {
             plan.push_back({{"op", "deployFiles"}, {"name", d.value("name", "")}});
+        } else if (builder == "scripture") {
+            const json sc = d.value("scripture", json::object());
+            for (const auto& [alias, _] : sc.value("basenames", json::object()).items()) {
+                plan.push_back({{"op", "installBasename"},
+                                {"alias", alias},
+                                {"name", d.value("name", "")}});
+            }
         }
     }
     // PATH wiring is idempotent and applies once per profile.
@@ -135,6 +142,9 @@ RawResult Engine::execute(const AdapterCall& call) {
                 r.lines.push_back("  shim    " + step.value("target", ""));
             } else if (op == "writeShimDir") {
                 r.lines.push_back("  shim*   " + step.value("dir", "") + "/*");
+            } else if (op == "installBasename") {
+                r.lines.push_back("  basename " + step.value("alias", "") + " -> kuli --basename " +
+                                  step.value("alias", ""));
             } else if (op == "envSetPath") {
                 r.lines.push_back("  env     PATH += " + step.value("entry", ""));
             }
@@ -194,6 +204,30 @@ RawResult Engine::execute(const AdapterCall& call) {
             record["wasPresent"] = fr->was_already_present;
             r.lines.push_back((fr->was_already_present ? "cached   " : "realized ") + name +
                               " -> " + fr->store_dir.string());
+        } else if (builder == "scripture") {
+            const json sc = d.value("scripture", json::object());
+            std::string store_dir = d.value("storePath", "");
+            std::vector<std::pair<std::string, std::string>> files;
+            for (const auto& f : sc.value("files", json::array())) {
+                files.emplace_back(f.value("path", ""), f.value("content", ""));
+            }
+            // A generated JSON manifest makes the store path self-describing (§9.1)
+            // and lets the basename router read basenames without a Luau VM.
+            json manifest{{"name", name},
+                          {"version", sc.value("version", "")},
+                          {"basenames", sc.value("basenames", json::object())}};
+            files.emplace_back("manifest.json", manifest.dump(2));
+
+            auto sr = store.realize_inline(store_dir, hash, files);
+            if (!sr) {
+                r.exit_code = kuli::diag::exit_code_of(sr.error());
+                r.raw_stderr = kuli::diag::render(sr.error(), /*color=*/false);
+                return r;
+            }
+            record["storeDir"] = sr->store_dir.string();
+            record["wasPresent"] = sr->was_already_present;
+            r.lines.push_back((sr->was_already_present ? "cached   " : "realized ") + name +
+                              " (scripture) -> " + sr->store_dir.string());
         }
         // composite: children already realized above; symlinkJoin of the merged
         // dir is a Phase I refinement. withFiles: Phase I.

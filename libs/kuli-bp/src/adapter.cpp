@@ -60,6 +60,16 @@ json deriv_json(const Derivation& d) {
             files.push_back({{"path", f.path}, {"mode", f.mode}, {"content", f.content}});
         }
         j["files"] = files;
+    } else if (d.builder == Builder::Scripture) {
+        json basenames = json::object();
+        for (const auto& [alias, rel] : d.scripture.basenames) basenames[alias] = rel;
+        json files = json::array();
+        for (const auto& [path, content] : d.scripture.files) {
+            files.push_back({{"path", path}, {"content", content}});
+        }
+        j["scripture"] = {{"version", d.scripture.version},
+                          {"basenames", basenames},
+                          {"files", files}};
     }
     return j;
 }

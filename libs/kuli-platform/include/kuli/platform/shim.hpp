@@ -17,6 +17,12 @@ namespace fs = std::filesystem;
 [[nodiscard]] bool write_shim(const fs::path& bin_dir, const std::string& alias,
                               const fs::path& target);
 
+// Write a scripture basename shim that re-enters kuli: `<basename> args...`
+// becomes `<kuli_exe> --basename <basename> -- args...` (design §9.3). The shim
+// file naming matches write_shim, so remove_shim removes it.
+[[nodiscard]] bool write_basename_shim(const fs::path& bin_dir, const std::string& basename,
+                                       const fs::path& kuli_exe);
+
 // Remove the shim for <alias>. Returns true if a file was deleted.
 bool remove_shim(const fs::path& bin_dir, const std::string& alias);
 

@@ -10,7 +10,7 @@
 
 namespace kuli::luau {
 
-enum class Builder { Fetch, Composite, WithFiles };
+enum class Builder { Fetch, Composite, WithFiles, Scripture };
 
 const char* builder_name(Builder b);
 
@@ -36,11 +36,21 @@ struct FetchSpec {
     std::string post_install; // optional: script run once on fresh extract
 };
 
+// A scripture package (§8.2.10 / §9.1): a self-contained content-addressed
+// derivation carrying a manifest + Luau adapters + static resources. Unlike a
+// fetch, its bytes are supplied inline by the blueprint (deterministic, so the
+// hash covers them directly) and realize writes them into the store path.
+struct ScriptureSpec {
+    std::string version;                            // e.g. "0.1.0"
+    std::map<std::string, std::string> basenames;   // basename -> adapter rel path
+    std::map<std::string, std::string> files;       // rel path (adapters/*, resources/*) -> content
+};
+
 struct Derivation {
     Builder builder = Builder::Fetch;
     std::string hash;          // 64 hex (sha256 of the input closure)
     std::string name;
-    std::string store_path;    // "<hash[:16]>-<name>"
+    std::string store_path;    // "<hash[:16]>-<name>" ("-scripture" suffix for scriptures)
     std::string system_target; // e.g. "windows-x64"
 
     FetchSpec fetch;                       // Builder::Fetch
@@ -48,6 +58,7 @@ struct Derivation {
     std::vector<std::string> requires_;    // Builder::Composite
     std::string base;                      // Builder::WithFiles (child hash)
     std::vector<FileEntry> files;          // Builder::WithFiles
+    ScriptureSpec scripture;               // Builder::Scripture
 };
 
 struct DerivationGraph {

@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "kuli/crypto/hash.hpp"
 #include "kuli/diag/diagnostic.hpp"
@@ -44,6 +46,16 @@ struct Store {
     std::expected<FetchResult, kuli::diag::Diagnostic> realize_fetch(
         std::string_view hash16, std::string_view name, std::string_view url,
         const kuli::crypto::HashSpec& expected, std::string_view bin) const;
+
+    // Realize inline file content into a content-addressed store path (scripture
+    // adapters/resources/manifest, §9.1). Unlike realize_from_archive the bytes
+    // are supplied directly; `content_id` (the scripture's derivation hash) is
+    // recorded in the marker for idempotency + collision detection.
+    // `store_dir_name` is the derivation's full storePath ("<hash16>-<name>-scripture").
+    // `files` maps relative paths (rejected if they escape the path) to content.
+    std::expected<FetchResult, kuli::diag::Diagnostic> realize_inline(
+        std::string_view store_dir_name, std::string_view content_id,
+        const std::vector<std::pair<std::string, std::string>>& files) const;
 };
 
 Store default_store();

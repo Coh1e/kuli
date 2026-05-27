@@ -10,9 +10,11 @@
 #include <vector>
 
 #include "kuli/bp/apply.hpp"
+#include "kuli/bp/scripture.hpp"
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/platform/host.hpp"
 #include "kuli/platform/paths.hpp"
+#include "kuli/platform/shim.hpp"
 #include "kuli/version.hpp"
 
 namespace fs = std::filesystem;
@@ -135,47 +137,46 @@ int run_scripture(const std::vector<std::string>& args) {
     KULI_PARSE(app, args);
 
     if (*install) {
+        // `scripture install` registers a *built-in* basename. Third-party
+        // scripture packages install via `kuli bp apply <scripture-blueprint>`
+        // (the unified derivation interface, §8.2.10).
         if (!is_known_basename(install_name)) {
             return report(kuli::diag::Diagnostic::error(
-                "unknown built-in basename: " + install_name, "E0900"));
+                              "unknown built-in basename: " + install_name, "E0900")
+                              .with_help("third-party scriptures install via `kuli bp apply`"));
         }
-        fs::path exe = kuli::platform::paths::current_exe();
         fs::path bin = kuli::platform::paths::xdg_bin_home();
-        std::error_code ec;
-        fs::create_directories(bin, ec);
-        fs::path shim = bin / (install_name + ".cmd");
-        std::ofstream o(shim, std::ios::binary | std::ios::trunc);
-        if (!o) {
-            return report(kuli::diag::Diagnostic::error("cannot write shim: " + shim.string(),
-                                                        "E0901"));
+        if (!kuli::platform::write_basename_shim(bin, install_name,
+                                                 kuli::platform::paths::current_exe())) {
+            return report(kuli::diag::Diagnostic::error(
+                "cannot write basename shim for " + install_name, "E0901"));
         }
-        o << "@echo off\r\n\"" << exe.string() << "\" --basename " << install_name << " -- %*\r\n";
-        std::cout << "installed basename '" << install_name << "' -> " << shim.string() << "\n";
+        std::cout << "installed basename '" << install_name << "' -> " << bin.string() << "\n";
         return 0;
     }
-    std::cout << "kuli-bp\n";  // ls
-    return 0;
+    std::cout << "kuli-bp  (built-in)\n";  // ls: built-in first, then installed scriptures
+    return kuli::bp::scripture_list();
 }
 
 }  // namespace
 
+// Route a basename (built-in or installed scripture) to its handler.
+int route_basename(const std::string& name, const std::vector<std::string>& rest) {
+    if (name == "kuli-bp") return run_bp(rest);  // built-in
+    return kuli::bp::run_basename(name, rest, fs::current_path());
+}
+
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
 
-    // Basename routing (docs/cli.md §1/§9.2): `kuli --basename <name> -- ...`
-    // (used by the shim) or `kuli <basename> ...` sugar.
-    std::string basename;
-    std::vector<std::string> rest;
+    // Explicit basename form used by the shims (docs/cli.md §1/§9.2):
+    // `kuli --basename <name> -- <args>`.
     if (args.size() >= 2 && args[0] == "--basename") {
-        basename = args[1];
         std::size_t i = 2;
         if (i < args.size() && args[i] == "--") ++i;
-        rest.assign(args.begin() + static_cast<long>(i), args.end());
-    } else if (!args.empty() && is_known_basename(args[0])) {
-        basename = args[0];
-        rest.assign(args.begin() + 1, args.end());
+        std::vector<std::string> rest(args.begin() + static_cast<long>(i), args.end());
+        return route_basename(args[1], rest);
     }
-    if (basename == "kuli-bp") return run_bp(rest);
 
     if (args.empty()) return print_version();
     const std::string noun = args[0];
@@ -185,6 +186,12 @@ int main(int argc, char** argv) {
     if (noun == "bp") return run_bp(sub);
     if (noun == "generation") return run_generation(sub);
     if (noun == "scripture") return run_scripture(sub);
+
+    // Basename sugar: `kuli <basename> ...` for a built-in or installed scripture
+    // (nouns take precedence, so this never shadows a real subcommand).
+    if (is_known_basename(noun) || kuli::bp::is_installed_basename(noun)) {
+        return route_basename(noun, sub);
+    }
 
     return report(kuli::diag::Diagnostic::error("unknown command: " + noun, "E0001")
                       .with_help("try `kuli bp`, `kuli generation`, `kuli scripture`, or `kuli version`"));

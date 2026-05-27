@@ -17,6 +17,7 @@ add_executable(kuli-tests
     test_engine_dryrun.cpp
     test_engine_realize.cpp
     test_generation.cpp
+    test_scripture.cpp
     test_rollback.cpp
     test_resolver.cpp
     test_source.cpp
@@ -53,6 +54,7 @@ add_test(NAME ir_validate COMMAND kuli-tests --test-case=ir_validate*)
 add_test(NAME engine_dryrun COMMAND kuli-tests --test-case=engine_dryrun*)
 add_test(NAME engine_realize COMMAND kuli-tests --test-case=engine_realize*)
 add_test(NAME generation COMMAND kuli-tests --test-case=generation*)
+add_test(NAME scripture COMMAND kuli-tests --test-case=scripture*)
 add_test(NAME rollback COMMAND kuli-tests --test-case=rollback*)
 add_test(NAME resolver COMMAND kuli-tests --test-case=resolver*)
 add_test(NAME source COMMAND kuli-tests --test-case=source*)

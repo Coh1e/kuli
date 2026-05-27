@@ -35,7 +35,7 @@ std::expected<void, Diagnostic> validate_apply_derivation(const json& node) {
         return std::unexpected(invalid("ApplyDerivation.node.derivations must be an array"));
     }
 
-    static const std::set<std::string> builders = {"fetch", "composite", "withFiles"};
+    static const std::set<std::string> builders = {"fetch", "composite", "withFiles", "scripture"};
     std::set<std::string> hashes;
     for (const auto& d : node["derivations"]) {
         if (!d.is_object()) return std::unexpected(invalid("each derivation must be an object"));
@@ -60,6 +60,28 @@ std::expected<void, Diagnostic> validate_apply_derivation(const json& node) {
             }
             if (!is_sha256_hex(f["sha256"].get<std::string>())) {
                 return std::unexpected(invalid("fetch sha256 must be 64 hex chars"));
+            }
+        }
+        if (builder == "scripture") {
+            if (!d.contains("scripture") || !d["scripture"].is_object()) {
+                return std::unexpected(invalid("scripture derivation missing 'scripture' object"));
+            }
+            const auto& s = d["scripture"];
+            if (!s.contains("basenames") || !s["basenames"].is_object() || s["basenames"].empty()) {
+                return std::unexpected(invalid("scripture must declare at least one basename"));
+            }
+            for (const auto& [_, v] : s["basenames"].items()) {
+                if (!v.is_string()) {
+                    return std::unexpected(invalid("scripture basename must map to a string adapter path"));
+                }
+            }
+            if (!s.contains("files") || !s["files"].is_array()) {
+                return std::unexpected(invalid("scripture missing 'files' array"));
+            }
+            for (const auto& f : s["files"]) {
+                if (!is_str(f, "path") || !f.contains("content") || !f["content"].is_string()) {
+                    return std::unexpected(invalid("scripture file needs string 'path' and 'content'"));
+                }
             }
         }
         hashes.insert(d["hash"].get<std::string>());

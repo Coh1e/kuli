@@ -27,12 +27,21 @@ struct Shim {
     std::string bin_rel;  // exe path within the store dir (e.g. "ninja.exe")
 };
 
+// One scripture basename a generation projects into ~/.local/bin. The shim
+// re-enters kuli (`kuli --basename <alias>`); `adapter` is the store-relative
+// adapter path the basename router loads (§9.2).
+struct Basename {
+    std::string alias;    // command name on PATH (e.g. "greet")
+    std::string adapter;  // adapter rel path within the store dir (e.g. "adapters/greet.luau")
+};
+
 struct GenDeriv {
     std::string hash;
     std::string name;
     std::string store_path;
     std::vector<Shim> shims;
     std::vector<kuli::luau::FileEntry> files;  // withFiles config deploys (profile, reversible)
+    std::vector<Basename> basenames;           // scripture basenames this derivation provides
 };
 
 struct Generation {

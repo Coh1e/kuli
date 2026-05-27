@@ -78,11 +78,16 @@ json to_json(const Generation& g) {
         for (const auto& f : d.files) {
             files.push_back({{"path", f.path}, {"mode", f.mode}, {"content", f.content}});
         }
+        json basenames = json::array();
+        for (const auto& b : d.basenames) {
+            basenames.push_back({{"alias", b.alias}, {"adapter", b.adapter}});
+        }
         derivs.push_back({{"hash", d.hash},
                           {"name", d.name},
                           {"storePath", d.store_path},
                           {"shims", shims},
-                          {"files", files}});
+                          {"files", files},
+                          {"basenames", basenames}});
     }
     return json{{"id", g.id},
                 {"parent", g.parent},
@@ -110,6 +115,9 @@ Generation from_json(const json& j) {
         for (const auto& f : d.value("files", json::array())) {
             e.files.push_back(kuli::luau::FileEntry{f.value("path", ""), f.value("mode", "replace"),
                                                     f.value("content", "")});
+        }
+        for (const auto& b : d.value("basenames", json::array())) {
+            e.basenames.push_back(Basename{b.value("alias", ""), b.value("adapter", "")});
         }
         g.derivations.push_back(std::move(e));
     }
@@ -203,12 +211,17 @@ Generation Profile::commit(const kuli::luau::DerivationGraph& g) {
     gen.set_hash = derivation_set_hash(g);
     gen.env = {"~/.local/bin"};
     for (const auto& [h, d] : g.nodes) {
-        GenDeriv e{d.hash, d.name, d.store_path, {}, {}};
+        GenDeriv e{d.hash, d.name, d.store_path, {}, {}, {}};
         if (d.builder == Builder::Fetch && !d.fetch.bin.empty()) {
             e.shims.push_back(Shim{shim_basename(d.fetch.bin), d.fetch.bin});
         }
         if (d.builder == Builder::WithFiles) {
             e.files = d.files;  // config files this derivation deploys to the profile
+        }
+        if (d.builder == Builder::Scripture) {
+            for (const auto& [alias, adapter] : d.scripture.basenames) {
+                e.basenames.push_back(Basename{alias, adapter});
+            }
         }
         gen.derivations.push_back(std::move(e));
     }
@@ -230,14 +243,18 @@ bool Profile::activate(int target_id, const fs::path& bin_dir, const fs::path& s
     for (const auto& d : target->derivations) {
         for (const auto& s : d.shims) target_aliases.insert(s.alias);
         for (const auto& f : d.files) target_files.insert(expand_path(f.path).string());
+        for (const auto& b : d.basenames) target_aliases.insert(b.alias);  // share ~/.local/bin
     }
 
-    // Remove shims + config files the current generation projected that the
-    // target does not (config files restore their backup).
+    // Remove shims + basenames + config files the current generation projected
+    // that the target does not (config files restore their backup).
     if (cur) {
         for (const auto& d : cur->derivations) {
             for (const auto& s : d.shims) {
                 if (!target_aliases.count(s.alias)) kuli::platform::remove_shim(bin_dir, s.alias);
+            }
+            for (const auto& b : d.basenames) {
+                if (!target_aliases.count(b.alias)) kuli::platform::remove_shim(bin_dir, b.alias);
             }
             for (const auto& f : d.files) {
                 fs::path ep = expand_path(f.path);
@@ -246,8 +263,10 @@ bool Profile::activate(int target_id, const fs::path& bin_dir, const fs::path& s
         }
     }
 
-    // (Re)write the target's shims (point at its immutable store paths) + files.
+    // (Re)write the target's shims (point at its immutable store paths), config
+    // files, and scripture basename shims (re-enter kuli via --basename).
     bool ok = true;
+    fs::path kuli_exe = kuli::platform::paths::current_exe();
     for (const auto& d : target->derivations) {
         for (const auto& s : d.shims) {
             fs::path tgt = store_root / d.store_path / fs::path(s.bin_rel);
@@ -255,6 +274,9 @@ bool Profile::activate(int target_id, const fs::path& bin_dir, const fs::path& s
         }
         for (const auto& f : d.files) {
             if (!deploy_file(expand_path(f.path), f.content)) ok = false;
+        }
+        for (const auto& b : d.basenames) {
+            if (!kuli::platform::write_basename_shim(bin_dir, b.alias, kuli_exe)) ok = false;
         }
     }
     // Don't advance `current` on a partial projection — leaving it at the old

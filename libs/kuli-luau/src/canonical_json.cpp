@@ -93,8 +93,29 @@ std::string hash_withfiles(const std::string& name, const std::string& base_hash
     return sha256_of(closure);
 }
 
+std::string hash_scripture(const std::string& name, const ScriptureSpec& s) {
+    json basenames = json::object();
+    for (const auto& [alias, rel] : s.basenames) basenames[alias] = rel;  // map -> sorted keys
+    json files = json::array();
+    for (const auto& [path, content] : s.files) {  // map iterates sorted by path
+        files.push_back({{"path", path}, {"content_sha256", kuli::crypto::sha256_hex(content)}});
+    }
+    json closure{
+        {"builder_cmd", "scripture"},
+        {"name", name},
+        {"version", s.version},
+        {"basenames", basenames},
+        {"files", files},
+    };
+    return sha256_of(closure);
+}
+
 std::string store_path_for(const std::string& hash, const std::string& name) {
     return hash.substr(0, 16) + "-" + name;
+}
+
+std::string store_path_for_scripture(const std::string& hash, const std::string& name) {
+    return store_path_for(hash, name) + "-scripture";
 }
 
 }  // namespace kuli::luau

@@ -29,7 +29,15 @@ std::string hash_composite(const std::string& name,
 std::string hash_withfiles(const std::string& name, const std::string& base_hash,
                            const std::vector<FileEntry>& files);
 
+// scripture: name + version + basenames + per-file {path, content-sha256}
+// (§8.2.10). The adapter/resource bytes are part of the identity (a changed
+// adapter is a new derivation, hence a new store path).
+std::string hash_scripture(const std::string& name, const ScriptureSpec& s);
+
 // "<hash[:16]>-<name>".
 std::string store_path_for(const std::string& hash, const std::string& name);
+
+// "<hash[:16]>-<name>-scripture" (§9.1 — a self-describing store path).
+std::string store_path_for_scripture(const std::string& hash, const std::string& name);
 
 }  // namespace kuli::luau

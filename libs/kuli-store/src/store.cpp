@@ -185,6 +185,77 @@ std::expected<FetchResult, Diagnostic> Store::realize_fetch(
     return realize_from_archive(hash16, name, archive, expected, bin);
 }
 
+std::expected<FetchResult, Diagnostic> Store::realize_inline(
+    std::string_view store_dir_name, std::string_view content_id,
+    const std::vector<std::pair<std::string, std::string>>& files) const {
+    fs::path dir = root / std::string(store_dir_name);
+    kuli::crypto::HashSpec expected{kuli::crypto::Algorithm::Sha256, std::string(content_id)};
+    auto make_result = [&](bool present) {
+        FetchResult r;
+        r.store_dir = dir;
+        r.bin_path = dir;
+        r.was_already_present = present;
+        return r;
+    };
+
+    switch (check_cache(dir, expected)) {
+        case CacheState::Hit:       return make_result(true);
+        case CacheState::Collision: return std::unexpected(collision_error(dir));
+        case CacheState::Absent:    break;
+    }
+
+    std::error_code ec;
+    fs::create_directories(root, ec);
+    if (fs::exists(dir, ec)) fs::remove_all(dir, ec);  // H-3: clear an incomplete partial
+    fs::path tmp = root / ("." + std::string(store_dir_name) + ".tmp");
+    fs::remove_all(tmp, ec);
+    fs::create_directories(tmp, ec);
+
+    for (const auto& [rel, content] : files) {
+        // Containment: the resolved path must stay within tmp (no "..", absolute).
+        fs::path target = (tmp / fs::path(rel)).lexically_normal();
+        fs::path rel_to = target.lexically_relative(tmp);
+        if (rel_to.empty() || *rel_to.begin() == "..") {
+            fs::remove_all(tmp, ec);
+            return std::unexpected(
+                Diagnostic::error("scripture file escapes its store path: " + rel, "E0234"));
+        }
+        fs::create_directories(target.parent_path(), ec);
+        std::ofstream o(target, std::ios::binary | std::ios::trunc);
+        if (!o || (o.write(content.data(), static_cast<std::streamsize>(content.size())), !o.good())) {
+            fs::remove_all(tmp, ec);
+            return std::unexpected(Diagnostic::error("cannot write scripture file: " + rel, "E0235"));
+        }
+    }
+
+    nlohmann::json marker{
+        {"hash", std::string(store_dir_name)},
+        {"sha256", std::string(content_id)},  // the scripture derivation hash
+        {"realized_at", now_iso()},
+        {"kind", "scripture"},
+    };
+    {
+        std::ofstream m(tmp / kMarker, std::ios::binary | std::ios::trunc);
+        if (!m) {
+            fs::remove_all(tmp, ec);
+            return std::unexpected(Diagnostic::error("cannot write store marker", "E0231"));
+        }
+        m << marker.dump(2);
+    }
+
+    fs::rename(tmp, dir, ec);
+    if (ec) {
+        if (check_cache(dir, expected) == CacheState::Hit) {
+            fs::remove_all(tmp, ec);
+            return make_result(true);
+        }
+        fs::remove_all(tmp, ec);
+        return std::unexpected(Diagnostic::error(
+            "failed to publish store path " + dir.string() + ": " + ec.message(), "E0232"));
+    }
+    return make_result(false);
+}
+
 Store default_store() {
     return Store{kuli::platform::paths::store_dir(), kuli::platform::paths::downloads_dir()};
 }

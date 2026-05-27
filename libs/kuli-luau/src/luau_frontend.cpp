@@ -253,6 +253,69 @@ int lib_withfiles(lua_State* L) {
     return 1;
 }
 
+// Defined below (shared with lib_read_resource); declared here for mkScripture.
+bool unsafe_rel(const std::string& rel);
+
+// Read a Luau table of { string = string } into `out` (overwriting). Non-string
+// keys/values are skipped. Used for mkScripture's basenames / adapters / resources.
+void read_string_map(lua_State* L, int tidx, const char* field,
+                     std::map<std::string, std::string>& out) {
+    lua_getfield(L, tidx, field);
+    if (lua_type(L, -1) == LUA_TTABLE) {
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {  // key at -2, value at -1
+            if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) == LUA_TSTRING) {
+                std::string key = lua_tostring(L, -2);
+                std::size_t len = 0;
+                const char* c = lua_tolstring(L, -1, &len);
+                out[key] = std::string(c, len);
+            }
+            lua_pop(L, 1);  // pop value, keep key
+        }
+    }
+    lua_pop(L, 1);
+}
+
+int lib_mkscripture(lua_State* L) {
+    EvalState* st = state_of(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Derivation d;
+    d.builder = Builder::Scripture;
+    d.name = req_field(L, 1, "name", "mkScripture");
+    d.scripture.version = opt_field(L, 1, "version").value_or("0.0.0");
+
+    read_string_map(L, 1, "basenames", d.scripture.basenames);
+    if (d.scripture.basenames.empty()) {
+        luaL_error(L, "mkScripture: 'basenames' must map at least one basename to an adapter path");
+    }
+    // adapters + resources share one rel-path -> content map (the store layout).
+    read_string_map(L, 1, "adapters", d.scripture.files);
+    read_string_map(L, 1, "resources", d.scripture.files);
+
+    for (const auto& [alias, rel] : d.scripture.basenames) {
+        if (unsafe_rel(rel)) {
+            luaL_error(L, "mkScripture: unsafe adapter path for basename '%s': %s", alias.c_str(),
+                       rel.c_str());
+        }
+        if (!d.scripture.files.count(rel)) {
+            luaL_error(L,
+                       "mkScripture: basename '%s' maps to adapter '%s' which is not provided in "
+                       "adapters/resources",
+                       alias.c_str(), rel.c_str());
+        }
+    }
+    for (const auto& [rel, _] : d.scripture.files) {
+        if (unsafe_rel(rel)) luaL_error(L, "mkScripture: unsafe file path: %s", rel.c_str());
+    }
+
+    d.system_target = st->system_target;
+    d.hash = hash_scripture(d.name, d.scripture);
+    d.store_path = store_path_for_scripture(d.hash, d.name);
+    st->graph.nodes[d.hash] = d;
+    push_derivation_table(L, d);
+    return 1;
+}
+
 int lib_merge(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -416,6 +479,15 @@ void on_interrupt(lua_State* L, int /*gc*/) {
     }
 }
 
+// Shared "exceeded the evaluation time budget" diagnostic (H-1 resource limit).
+Diagnostic time_budget_diag(const char* what) {
+    return Diagnostic::of(Kind::Sandbox,
+                          std::string(what) + " exceeded its evaluation time budget "
+                          "(R-NF-03 resource limit)",
+                          "E0302")
+        .with_help("must terminate quickly and purely; remove unbounded loops");
+}
+
 // ----- ctx + VM -------------------------------------------------------------
 struct Vm {
     AllocState alloc_;
@@ -463,8 +535,9 @@ void add_closure(lua_State* L, EvalState* st, const char* name, lua_CFunction fn
     lua_setfield(L, -2, name);  // assumes target table just below
 }
 
-// Build the ctx table on top of the stack.
-void build_ctx(lua_State* L, EvalState* st) {
+// Build the ctx table on top of the stack. `argv` populates ctx.argv for
+// scripture adapters (empty for blueprints, which ignore it).
+void build_ctx(lua_State* L, EvalState* st, const std::vector<std::string>& argv = {}) {
     lua_newtable(L);  // ctx
 
     lua_newtable(L);  // ctx.system
@@ -472,6 +545,13 @@ void build_ctx(lua_State* L, EvalState* st) {
     push_str(L, st->system.arch);        lua_setfield(L, -2, "arch");
     push_str(L, st->system.win_version); lua_setfield(L, -2, "winVersion");
     lua_setfield(L, -2, "system");
+
+    lua_newtable(L);  // ctx.argv (1-based array)
+    for (std::size_t i = 0; i < argv.size(); ++i) {
+        push_str(L, argv[i]);
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_setfield(L, -2, "argv");
 
     lua_newtable(L);  // ctx.source
     push_str(L, st->source.name);            lua_setfield(L, -2, "name");
@@ -483,6 +563,7 @@ void build_ctx(lua_State* L, EvalState* st) {
     add_closure(L, st, "fetchGitHubRelease", lib_fetch);
     add_closure(L, st, "composite", lib_composite);
     add_closure(L, st, "withFiles", lib_withfiles);
+    add_closure(L, st, "mkScripture", lib_mkscripture);
     add_closure(L, st, "merge", lib_merge);
     add_closure(L, st, "readResource", lib_read_resource);
     lua_setfield(L, -2, "lib");
@@ -619,6 +700,89 @@ std::expected<EvalResult, Diagnostic> evaluate(const EvalRequest& req) {
     return result;
 }
 
+std::expected<AdapterResult, Diagnostic> evaluate_adapter(const AdapterRequest& req) {
+    bool ok = false;
+    std::string source = read_file(req.adapter_path, ok);
+    if (!ok) {
+        return std::unexpected(Diagnostic::error(
+            "cannot read scripture adapter: " + req.adapter_path.string(), "E0950"));
+    }
+    std::string chunk = req.adapter_path.filename().string();
+
+    // Same parse + forbidden-global pre-scan as a blueprint (R-NF-03): a
+    // third-party adapter is untrusted code.
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseResult pr =
+        Luau::Parser::parse(source.data(), source.size(), names, allocator, {});
+    if (!pr.errors.empty()) {
+        const auto& e = pr.errors.front();
+        Diagnostic d = Diagnostic::of(Kind::General, e.getMessage(), "E0951");
+        d.with_span(Span{chunk, static_cast<int>(e.getLocation().begin.line) + 1,
+                         static_cast<int>(e.getLocation().begin.column) + 1, "syntax error"});
+        return std::unexpected(std::move(d));
+    }
+    ForbiddenScan scan;
+    if (pr.root) pr.root->visit(&scan);
+    if (!scan.hits.empty()) {
+        const auto& h = scan.hits.front();
+        Diagnostic d = Diagnostic::of(
+            Kind::Sandbox,
+            "scripture adapter uses forbidden API '" + h.name + "' (Luau sandbox, R-NF-03)",
+            "E0301");
+        d.with_span(Span{chunk, h.line, h.col, "forbidden in sandbox"});
+        return std::unexpected(std::move(d));
+    }
+
+    Vm vm(req.limits);
+    if (!vm.L) {
+        return std::unexpected(Diagnostic::of(Kind::Internal, "failed to create Luau VM", "E7001"));
+    }
+    lua_State* L = vm.L;
+
+    EvalState st;
+    st.system = req.system;
+    st.source = SourceCtx{"", req.scripture_root, ""};  // readResource → <store>/resources
+    st.system_target = req.system.os + "-" + req.system.arch;
+
+    if (!eval_blueprint_function(L, &st, source, chunk)) {
+        if (vm.time_tripped()) return std::unexpected(time_budget_diag("scripture adapter"));
+        return std::unexpected(Diagnostic::of(Kind::General, safe_tostring(L, -1), "E0952"));
+    }
+    build_ctx(L, &st, req.argv);   // [function, ctx]
+    st.ctx_ref = lua_ref(L, -1);
+    if (lua_pcall(L, 1, 1, 0) != 0) {
+        Diagnostic d = vm.time_tripped() ? time_budget_diag("scripture adapter")
+                       : st.pending      ? *st.pending
+                                         : Diagnostic::of(Kind::General, safe_tostring(L, -1), "E0953");
+        lua_unref(L, st.ctx_ref);
+        return std::unexpected(std::move(d));
+    }
+    if (lua_type(L, -1) != LUA_TTABLE) {
+        lua_unref(L, st.ctx_ref);
+        return std::unexpected(Diagnostic::error(
+            "scripture adapter must return a result table { lines = { ... } }", "E0954"));
+    }
+
+    AdapterResult res;
+    lua_getfield(L, -1, "lines");
+    if (lua_type(L, -1) == LUA_TTABLE) {
+        int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_type(L, -1) == LUA_TSTRING) {
+                std::size_t len = 0;
+                const char* c = lua_tolstring(L, -1, &len);
+                res.lines.emplace_back(c, len);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);  // pop lines
+    lua_unref(L, st.ctx_ref);
+    return res;
+}
+
 }  // namespace kuli::luau
 
 namespace kuli::luau {
@@ -648,6 +812,7 @@ const char* builder_name(Builder b) {
         case Builder::Fetch:     return "fetch";
         case Builder::Composite: return "composite";
         case Builder::WithFiles: return "withFiles";
+        case Builder::Scripture: return "scripture";
     }
     return "fetch";
 }
