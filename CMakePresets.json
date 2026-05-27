@@ -22,15 +22,15 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
-      "name": "linux-clang",
-      "displayName": "Linux clang — Ninja (must compile, R-NF-05)",
+      "name": "linux-gcc",
+      "displayName": "Linux gcc — Ninja (must compile, R-NF-05)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "gcc-14",
+        "CMAKE_CXX_COMPILER": "g++-14",
         "VCPKG_TARGET_TRIPLET": "x64-linux"
       },
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
@@ -51,13 +51,13 @@
   "buildPresets": [
     { "name": "windows-msvc", "configurePreset": "windows-msvc" },
     { "name": "default", "configurePreset": "default" },
-    { "name": "linux-clang", "configurePreset": "linux-clang" },
+    { "name": "linux-gcc", "configurePreset": "linux-gcc" },
     { "name": "macos", "configurePreset": "macos" }
   ],
   "testPresets": [
     { "name": "windows-msvc", "configurePreset": "windows-msvc", "output": { "outputOnFailure": true } },
     { "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } },
-    { "name": "linux-clang", "configurePreset": "linux-clang", "output": { "outputOnFailure": true } },
+    { "name": "linux-gcc", "configurePreset": "linux-gcc", "output": { "outputOnFailure": true } },
     { "name": "macos", "configurePreset": "macos", "output": { "outputOnFailure": true } }
   ]
 }

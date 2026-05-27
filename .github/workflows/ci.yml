@@ -23,7 +23,7 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, preset: windows-msvc }
-          - { os: ubuntu-latest,  preset: linux-clang }
+          - { os: ubuntu-latest,  preset: linux-gcc }
           - { os: macos-latest,   preset: macos }
     steps:
       - uses: actions/checkout@v4
@@ -40,17 +40,12 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # clang-18 + a complete g++-14 toolchain: clang auto-selects gcc-14's
-      # libstdc++ (which has C++23 std::expected) and matches the libstdc++ ABI
-      # of vcpkg's C++ libs (CLI11). Installing only libstdc++-*-dev headers is
-      # not enough — clang needs a complete gcc install to select it.
-      - name: Install clang-18 + g++-14 + Ninja (Linux)
+      # gcc-14 has C++23 std::expected and matches the libstdc++ ABI of vcpkg's
+      # C++ libs (CLI11). (clang on the runner couldn't reliably select a
+      # std::expected-capable libstdc++, and libc++ clashed with vcpkg's libstdc++.)
+      - name: Install g++-14 + Ninja (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build clang-18 g++-14
-          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-14
 
       - name: Install Ninja (macOS)
         if: runner.os == 'macOS'
@@ -73,18 +68,7 @@ jobs:
           restore-keys: vcpkg-${{ matrix.preset }}-
 
       - name: Configure
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            # Force clang to use gcc-14's libstdc++ (has C++23 std::expected);
-            # clang's auto-selection picks an older one on this image.
-            gccdir=$(ls -d /usr/lib/gcc/x86_64-linux-gnu/14* | head -1)
-            cmake --preset ${{ matrix.preset }} \
-              -DCMAKE_CXX_FLAGS="--gcc-install-dir=$gccdir" \
-              -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=$gccdir"
-          else
-            cmake --preset ${{ matrix.preset }}
-          fi
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
