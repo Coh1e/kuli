@@ -111,6 +111,52 @@ TEST_CASE("exec run_process feeds stdin and captures stdout (sort)") {
     CHECK(a < b);  // sort put apple before banana
 }
 
+TEST_CASE("exec Pipeline chains stage stdout into the next stage's stdin") {
+#if defined(_WIN32)
+    nlohmann::json stage1 = {{"cmd", {"cmd", "/c", "echo banana& echo apple"}}};
+#else
+    nlohmann::json stage1 = {{"cmd", {"sh", "-c", "printf 'banana\\napple\\n'"}}};
+#endif
+    nlohmann::json stage2 = {{"cmd", {"sort"}}};
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::Pipeline);
+    ir["node"] = {{"stages", nlohmann::json::array({stage1, stage2})}};
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "pipe";
+    call.cwd = fs::current_path();
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+
+    CHECK(rr.exit_code == 0);
+    std::size_t apple = std::string::npos, banana = std::string::npos;
+    for (std::size_t i = 0; i < rr.lines.size(); ++i) {
+        if (rr.lines[i].find("apple") != std::string::npos) apple = i;
+        if (rr.lines[i].find("banana") != std::string::npos) banana = i;
+    }
+    REQUIRE(apple != std::string::npos);
+    REQUIRE(banana != std::string::npos);
+    CHECK(apple < banana);  // the second stage (sort) reordered the first stage's output
+}
+
+TEST_CASE("exec Pipeline --dry-run lists stages without running them") {
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::Pipeline);
+    ir["node"] = {{"stages", nlohmann::json::array({nlohmann::json{{"cmd", {"echo", "hi"}}}})}};
+    ir["options"] = {{"dry_run", true}};
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "pipe";
+    call.cwd = fs::current_path();
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+    CHECK(rr.exit_code == 0);
+    REQUIRE_FALSE(rr.lines.empty());
+    CHECK(rr.lines[0].rfind("dry-run:", 0) == 0);
+}
+
 TEST_CASE("exec transport rejects an unknown @host alias") {
     nlohmann::json ir;
     ir["schema"] = std::string(kuli::ir::SCHEMA);

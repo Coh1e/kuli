@@ -28,6 +28,7 @@ inline constexpr std::string_view EnvQuery = "EnvQuery";          // env var rea
 inline constexpr std::string_view EnvSet = "EnvSet";
 inline constexpr std::string_view FileOp = "FileOp";
 inline constexpr std::string_view Exec = "Exec";
+inline constexpr std::string_view Pipeline = "Pipeline";  // chained stages (§10)
 }  // namespace kind
 
 // Validate an IR document against kuli/ir/1.0 (hand-written checks, first error

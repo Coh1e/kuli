@@ -172,6 +172,25 @@ std::expected<void, Diagnostic> validate_simple_read(const json& node, const cha
     return {};
 }
 
+std::expected<void, Diagnostic> validate_pipeline(const json& node) {
+    if (!node.is_object()) return std::unexpected(invalid("Pipeline.node must be an object"));
+    if (!node.contains("stages") || !node["stages"].is_array() || node["stages"].empty()) {
+        return std::unexpected(invalid("Pipeline.node.stages must be a non-empty array"));
+    }
+    for (const auto& s : node["stages"]) {
+        if (!s.is_object() || !s.contains("cmd") || !s["cmd"].is_array() || s["cmd"].empty()) {
+            return std::unexpected(invalid("each Pipeline stage needs a non-empty 'cmd' array"));
+        }
+        for (const auto& a : s["cmd"]) {
+            if (!a.is_string()) return std::unexpected(invalid("Pipeline stage cmd entries must be strings"));
+        }
+        if (s.contains("at") && !s["at"].is_string()) {
+            return std::unexpected(invalid("Pipeline stage 'at' must be a string"));
+        }
+    }
+    return {};
+}
+
 std::expected<void, Diagnostic> validate_exec(const json& node) {
     if (!node.is_object()) return std::unexpected(invalid("Exec.node must be an object"));
     if (node.contains("at") && !node["at"].is_string()) {
@@ -211,6 +230,7 @@ std::expected<void, Diagnostic> validate(const json& doc) {
     if (k == kind::HostFacts) return validate_simple_read(doc["node"], "HostFacts", false);
     if (k == kind::EnvQuery) return validate_simple_read(doc["node"], "EnvQuery", true);
     if (k == kind::Exec) return validate_exec(doc["node"]);
+    if (k == kind::Pipeline) return validate_pipeline(doc["node"]);
     // Other kinds are declared but not yet validated in depth.
     if (k == kind::EnvSet || k == kind::FileOp) return {};
     return std::unexpected(invalid("unknown IR kind '" + k + "'"));
