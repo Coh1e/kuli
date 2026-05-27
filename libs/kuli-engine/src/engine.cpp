@@ -284,6 +284,24 @@ RawResult execute_process_query(const json& node, const fs::path& /*cwd*/) {
     return r;
 }
 
+// NetworkQuery (§4.4): netstat-style TCP socket listing (native via kuli-sense),
+// optionally filtered to `state: "LISTEN"`. Output:
+// "<proto> <local> <remote> <state> pid=<pid>".
+RawResult execute_network_query(const json& node, const fs::path& /*cwd*/) {
+    if (!local_at(node)) {
+        return fail(2, kuli::diag::Diagnostic::error("NetworkQuery is local-only for now", "E0613"),
+                    "");
+    }
+    std::string state_filter = node.value("state", std::string());  // e.g. "LISTEN"
+    RawResult r;
+    for (const auto& s : kuli::sense::list_sockets()) {
+        if (!state_filter.empty() && s.state != state_filter) continue;
+        r.lines.push_back(s.proto + "  " + s.local_addr + "  " + s.remote_addr + "  " + s.state +
+                          "  pid=" + std::to_string(s.pid));
+    }
+    return r;
+}
+
 // HostFacts (§4.4): a one-shot host summary (os / arch / hostname / cpu).
 RawResult execute_host_facts(const json& node, const fs::path& /*cwd*/) {
     if (!local_at(node)) {
@@ -407,6 +425,7 @@ RawResult Engine::execute(const AdapterCall& call) {
     if (ir_kind == std::string(kuli::ir::kind::FileQuery)) return execute_file_query(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::TextSearch)) return execute_text_search(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::ProcessQuery)) return execute_process_query(node_of(), call.cwd);
+    if (ir_kind == std::string(kuli::ir::kind::NetworkQuery)) return execute_network_query(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::HostFacts)) return execute_host_facts(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::EnvQuery)) return execute_env_query(node_of(), call.cwd);
     if (ir_kind == std::string(kuli::ir::kind::Exec)) return execute_exec(node_of(), call.cwd, dry_run);

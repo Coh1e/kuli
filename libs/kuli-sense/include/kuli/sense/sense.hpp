@@ -31,4 +31,16 @@ HostFacts host_facts();
 // The process environment as (name, value) pairs (unsorted; caller sorts).
 std::vector<std::pair<std::string, std::string>> env_vars();
 
+struct SocketInfo {
+    std::string proto;        // "tcp"
+    std::string local_addr;   // "127.0.0.1:8080"
+    std::string remote_addr;  // "0.0.0.0:0"
+    std::string state;        // "LISTEN" / "ESTABLISHED" / ...
+    long pid = 0;             // owning pid (Windows; 0 if unknown, e.g. Linux v0)
+};
+
+// Best-effort TCP socket table (IPv4). Windows = iphlpapi; Linux = /proc/net/tcp;
+// macOS = empty for now (sysctl pcblist deferred).
+std::vector<SocketInfo> list_sockets();
+
 }  // namespace kuli::sense

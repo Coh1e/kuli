@@ -4,8 +4,13 @@
 
 #include "kuli/platform/host.hpp"  // host_os / host_arch
 
+#include <cstdio>
+
 #if defined(_WIN32)
 #include <windows.h>
+#include <winsock2.h>   // after windows.h (WIN32_LEAN_AND_MEAN keeps winsock1 out)
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
 #include <tlhelp32.h>
 #elif defined(__linux__)
 #include <unistd.h>
@@ -40,6 +45,52 @@ std::string narrow(const wchar_t* w) {
     std::string s(static_cast<std::size_t>(n - 1), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
     return s;
+}
+
+const char* win_tcp_state(DWORD st) {
+    switch (st) {
+        case MIB_TCP_STATE_CLOSED:     return "CLOSED";
+        case MIB_TCP_STATE_LISTEN:     return "LISTEN";
+        case MIB_TCP_STATE_SYN_SENT:   return "SYN_SENT";
+        case MIB_TCP_STATE_SYN_RCVD:   return "SYN_RCVD";
+        case MIB_TCP_STATE_ESTAB:      return "ESTABLISHED";
+        case MIB_TCP_STATE_FIN_WAIT1:  return "FIN_WAIT1";
+        case MIB_TCP_STATE_FIN_WAIT2:  return "FIN_WAIT2";
+        case MIB_TCP_STATE_CLOSE_WAIT: return "CLOSE_WAIT";
+        case MIB_TCP_STATE_CLOSING:    return "CLOSING";
+        case MIB_TCP_STATE_LAST_ACK:   return "LAST_ACK";
+        case MIB_TCP_STATE_TIME_WAIT:  return "TIME_WAIT";
+        case MIB_TCP_STATE_DELETE_TCB: return "DELETE_TCB";
+        default:                       return "UNKNOWN";
+    }
+}
+
+std::string win_addr(DWORD addr, DWORD port) {
+    const auto* b = reinterpret_cast<const unsigned char*>(&addr);  // network order in memory
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", b[0], b[1], b[2], b[3],
+                  ntohs(static_cast<u_short>(port)));
+    return buf;
+}
+#elif defined(__linux__)
+const char* linux_tcp_state(const std::string& hex) {
+    static const char* names[] = {"",          "ESTABLISHED", "SYN_SENT",  "SYN_RECV",
+                                  "FIN_WAIT1", "FIN_WAIT2",   "TIME_WAIT", "CLOSE",
+                                  "CLOSE_WAIT", "LAST_ACK",   "LISTEN",    "CLOSING"};
+    long v = std::strtol(hex.c_str(), nullptr, 16);
+    return (v >= 1 && v <= 11) ? names[v] : "UNKNOWN";
+}
+
+// "0100007F:1F90" -> "127.0.0.1:8080" (hex IP is little-endian octets; hex port).
+std::string linux_addr(const std::string& tok) {
+    auto colon = tok.find(':');
+    if (colon == std::string::npos) return tok;
+    unsigned long ip = std::strtoul(tok.substr(0, colon).c_str(), nullptr, 16);
+    unsigned long port = std::strtoul(tok.substr(colon + 1).c_str(), nullptr, 16);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%lu.%lu.%lu.%lu:%lu", ip & 0xFF, (ip >> 8) & 0xFF,
+                  (ip >> 16) & 0xFF, (ip >> 24) & 0xFF, port);
+    return buf;
 }
 #endif
 
@@ -159,6 +210,52 @@ std::vector<std::pair<std::string, std::string>> env_vars() {
         }
     }
 #endif
+    return out;
+}
+
+std::vector<SocketInfo> list_sockets() {
+    std::vector<SocketInfo> out;
+#if defined(_WIN32)
+    ULONG size = 0;
+    GetExtendedTcpTable(nullptr, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (size == 0) return out;
+    std::vector<char> buf(size);
+    if (GetExtendedTcpTable(buf.data(), &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) !=
+        NO_ERROR) {
+        return out;
+    }
+    const auto* t = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buf.data());
+    for (DWORD i = 0; i < t->dwNumEntries; ++i) {
+        const auto& row = t->table[i];
+        SocketInfo s;
+        s.proto = "tcp";
+        s.local_addr = win_addr(row.dwLocalAddr, row.dwLocalPort);
+        // a remote endpoint is only meaningful when connected (port is 0 when not)
+        s.remote_addr = win_addr(row.dwRemoteAddr, row.dwState == MIB_TCP_STATE_LISTEN ? 0
+                                                                                       : row.dwRemotePort);
+        s.state = win_tcp_state(row.dwState);
+        s.pid = static_cast<long>(row.dwOwningPid);
+        out.push_back(std::move(s));
+    }
+#elif defined(__linux__)
+    std::ifstream in("/proc/net/tcp");
+    std::string line;
+    std::getline(in, line);  // header
+    while (std::getline(in, line)) {
+        std::istringstream ss(line);
+        std::string sl, local, rem, st;
+        ss >> sl >> local >> rem >> st;
+        if (local.empty() || rem.empty()) continue;
+        SocketInfo s;
+        s.proto = "tcp";
+        s.local_addr = linux_addr(local);
+        s.remote_addr = linux_addr(rem);
+        s.state = linux_tcp_state(st);
+        s.pid = 0;  // /proc/net/tcp gives an inode, not a pid (mapping deferred)
+        out.push_back(std::move(s));
+    }
+#endif
+    // macOS: empty for now (sysctl pcblist deferred).
     return out;
 }
 

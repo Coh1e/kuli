@@ -67,6 +67,17 @@ TEST_CASE("sense ProcessQuery IR lists processes as pid<TAB>name") {
     CHECK(rr.lines[0].find('\t') != std::string::npos);
 }
 
+TEST_CASE("sense NetworkQuery IR lists TCP sockets (best-effort)") {
+    auto rr = run(std::string(kuli::ir::kind::NetworkQuery));
+    CHECK(rr.exit_code == 0);
+    // Non-empty on Windows/Linux (there is always at least one socket); macOS is
+    // empty for now. When present, each line carries an address (host:port).
+    for (const auto& l : rr.lines) {
+        CHECK(l.find(':') != std::string::npos);
+        CHECK(l.rfind("tcp", 0) == 0);
+    }
+}
+
 TEST_CASE("sense EnvQuery IR reads the environment, filtered by name glob") {
 #if defined(_WIN32)
     _putenv_s("KULI_TEST_VAR", "hello");

@@ -207,6 +207,7 @@ std::expected<void, Diagnostic> validate(const json& doc) {
     if (k == kind::FileQuery) return validate_file_query(doc["node"]);
     if (k == kind::TextSearch) return validate_text_search(doc["node"]);
     if (k == kind::ProcessQuery) return validate_simple_read(doc["node"], "ProcessQuery", true);
+    if (k == kind::NetworkQuery) return validate_simple_read(doc["node"], "NetworkQuery", false);
     if (k == kind::HostFacts) return validate_simple_read(doc["node"], "HostFacts", false);
     if (k == kind::EnvQuery) return validate_simple_read(doc["node"], "EnvQuery", true);
     if (k == kind::Exec) return validate_exec(doc["node"]);

@@ -22,6 +22,7 @@ inline constexpr std::string_view ApplyDerivation = "ApplyDerivation";
 inline constexpr std::string_view FileQuery = "FileQuery";        // find/fd-style read (§4.4)
 inline constexpr std::string_view TextSearch = "TextSearch";      // grep/rg-style read (§4.4)
 inline constexpr std::string_view ProcessQuery = "ProcessQuery";  // ps-style read (§4.4)
+inline constexpr std::string_view NetworkQuery = "NetworkQuery";  // netstat-style read (§4.4)
 inline constexpr std::string_view HostFacts = "HostFacts";        // host summary read (§4.4)
 inline constexpr std::string_view EnvQuery = "EnvQuery";          // env var read (§4.4)
 inline constexpr std::string_view EnvSet = "EnvSet";
