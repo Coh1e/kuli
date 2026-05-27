@@ -16,7 +16,8 @@ namespace fs = std::filesystem;
 struct ProcessResult {
     bool launched = false;  // the process was started (exec may still have failed on POSIX)
     int exit_code = -1;     // process exit code (128+signal if terminated by a signal)
-    std::string output;     // captured stdout+stderr (only when capture = true)
+    std::string output;     // captured stdout (only when capture = true)
+    std::string error;      // captured stderr (only when capture = true)
 };
 
 // Run argv[0] (PATH-searched) with argv[1..], blocking until it exits. `cwd`

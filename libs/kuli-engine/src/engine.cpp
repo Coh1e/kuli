@@ -155,12 +155,13 @@ RawResult route_remote(const AdapterCall& call, std::string at) {
     }
     RawResult r;
     r.exit_code = pr.exit_code;
-    std::istringstream ss(pr.output);
+    std::istringstream ss(pr.output);  // far-side stdout -> our result lines
     std::string line;
     while (std::getline(ss, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         r.lines.push_back(line);
     }
+    r.raw_stderr = pr.error;  // far-side stderr -> our diagnostics
     return r;
 }
 
@@ -427,14 +428,15 @@ RawResult execute_exec(const json& node, const fs::path& cwd, bool dry_run) {
     RawResult r;
     r.exit_code = pr.exit_code;
     if (capture) {
-        // Split captured stdout+stderr into lines (the caller renders them);
-        // without capture the child already streamed to the terminal.
+        // stdout -> rendered lines, stderr -> diagnostics; without capture the
+        // child already streamed both to the terminal.
         std::istringstream ss(pr.output);
         std::string line;
         while (std::getline(ss, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             r.lines.push_back(line);
         }
+        r.raw_stderr = pr.error;
     }
     return r;
 }

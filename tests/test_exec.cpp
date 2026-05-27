@@ -88,6 +88,19 @@ TEST_CASE("exec Exec IR capture=true returns output as lines") {
     CHECK(found);
 }
 
+TEST_CASE("exec run_process separates captured stdout and stderr") {
+#if defined(_WIN32)
+    std::vector<std::string> cmd = {"cmd", "/c", "echo OUTLINE & echo ERRLINE 1>&2"};
+#else
+    std::vector<std::string> cmd = {"sh", "-c", "echo OUTLINE; echo ERRLINE 1>&2"};
+#endif
+    auto pr = platform::run_process(cmd, {}, /*capture=*/true);
+    CHECK(pr.launched);
+    CHECK(pr.output.find("OUTLINE") != std::string::npos);
+    CHECK(pr.output.find("ERRLINE") == std::string::npos);  // stderr not in stdout
+    CHECK(pr.error.find("ERRLINE") != std::string::npos);
+}
+
 TEST_CASE("exec run_process feeds stdin and captures stdout (sort)") {
     auto pr = platform::run_process({"sort"}, {}, /*capture=*/true, /*input=*/"banana\napple\n");
     CHECK(pr.launched);

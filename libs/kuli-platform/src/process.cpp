@@ -85,6 +85,7 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
     if (argv.empty()) return r;
 
     fs::path out_tmp = capture ? scratch_temp("out") : fs::path{};
+    fs::path err_tmp = capture ? scratch_temp("err") : fs::path{};
     fs::path in_tmp;
     if (!input.empty()) {
         in_tmp = scratch_temp("in");
@@ -106,7 +107,7 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    HANDLE hin = INVALID_HANDLE_VALUE, hout = INVALID_HANDLE_VALUE;
+    HANDLE hin = INVALID_HANDLE_VALUE, hout = INVALID_HANDLE_VALUE, herr = INVALID_HANDLE_VALUE;
     BOOL inherit = FALSE;
     if (use_handles) {
         SECURITY_ATTRIBUTES sa{};
@@ -125,8 +126,11 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
             hout = CreateFileW(out_tmp.wstring().c_str(), GENERIC_WRITE,
                                FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_TEMPORARY, nullptr);
+            herr = CreateFileW(err_tmp.wstring().c_str(), GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_TEMPORARY, nullptr);
             si.hStdOutput = hout;
-            si.hStdError = hout;
+            si.hStdError = herr;
         } else {
             si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
             si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -137,9 +141,11 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
                              wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi);
     if (hin != INVALID_HANDLE_VALUE) CloseHandle(hin);
     if (hout != INVALID_HANDLE_VALUE) CloseHandle(hout);
+    if (herr != INVALID_HANDLE_VALUE) CloseHandle(herr);
     if (!ok) {
         remove_quiet(in_tmp);
         remove_quiet(out_tmp);
+        remove_quiet(err_tmp);
         return r;  // launched = false
     }
     r.launched = true;
@@ -166,11 +172,13 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
             }
         }
         if (capture) {
-            int fd = open(out_tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-            if (fd < 0) _exit(127);
-            dup2(fd, 1);
-            dup2(fd, 2);
-            close(fd);
+            int ofd = open(out_tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            int efd = open(err_tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (ofd < 0 || efd < 0) _exit(127);
+            dup2(ofd, 1);
+            dup2(efd, 2);
+            close(ofd);
+            close(efd);
         }
         std::vector<char*> cargv;
         cargv.reserve(argv.size() + 1);
@@ -191,9 +199,13 @@ ProcessResult run_process(const std::vector<std::string>& argv, const fs::path& 
     (void)use_handles;
 #endif
 
-    if (capture) r.output = slurp(out_tmp);
+    if (capture) {
+        r.output = slurp(out_tmp);
+        r.error = slurp(err_tmp);
+    }
     remove_quiet(in_tmp);
     remove_quiet(out_tmp);
+    remove_quiet(err_tmp);
     return r;
 }
 
