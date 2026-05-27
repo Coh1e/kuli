@@ -8,8 +8,20 @@
 
 namespace kuli::bp {
 
-// `kuli host add <alias> [target] [--transport ssh|local-subprocess]`.
-int host_add(const std::string& alias, const std::string& target, const std::string& transport);
+// A registered transport target. Only `transport` + `target` are required;
+// the rest are optional ssh connection options.
+struct HostSpec {
+    std::string target;             // user@host (ssh); ignored for local-subprocess
+    std::string transport = "ssh";  // "ssh" | "local-subprocess"
+    std::string port;               // ssh -p
+    std::string identity;           // ssh -i <keyfile>
+    std::string extra;              // extra ssh args (whitespace-split)
+    std::string remote_kuli;        // kuli path on the remote (default "kuli")
+};
+
+// `kuli host add <alias> [target] [--transport ...] [--port ...] [--identity ...]
+//  [--extra ...] [--remote-kuli ...]`.
+int host_add(const std::string& alias, const HostSpec& spec);
 int host_remove(const std::string& alias);
 int host_list();
 

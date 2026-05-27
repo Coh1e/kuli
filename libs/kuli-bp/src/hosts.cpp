@@ -42,21 +42,27 @@ int report(const kuli::diag::Diagnostic& d) {
 }
 }  // namespace
 
-int host_add(const std::string& alias, const std::string& target, const std::string& transport) {
-    if (transport != "ssh" && transport != "local-subprocess") {
+int host_add(const std::string& alias, const HostSpec& spec) {
+    if (spec.transport != "ssh" && spec.transport != "local-subprocess") {
         return report(kuli::diag::Diagnostic::error(
             "transport must be 'ssh' or 'local-subprocess'", "E0980"));
     }
-    if (transport == "ssh" && target.empty()) {
+    if (spec.transport == "ssh" && spec.target.empty()) {
         return report(kuli::diag::Diagnostic::error("ssh host needs a target (user@host)", "E0981"));
     }
+    json entry{{"transport", spec.transport}, {"target", spec.target}};
+    if (!spec.port.empty()) entry["port"] = spec.port;
+    if (!spec.identity.empty()) entry["identity"] = spec.identity;
+    if (!spec.extra.empty()) entry["extra"] = spec.extra;
+    if (!spec.remote_kuli.empty()) entry["remote_kuli"] = spec.remote_kuli;
+
     json h = load();
-    h[alias] = {{"transport", transport}, {"target", target}};
+    h[alias] = entry;
     if (!save(h)) {
         return report(kuli::diag::Diagnostic::error("cannot write host registry", "E0982"));
     }
-    std::cout << "registered host '" << alias << "' -> " << transport
-              << (target.empty() ? "" : (" " + target)) << "\n";
+    std::cout << "registered host '" << alias << "' -> " << spec.transport
+              << (spec.target.empty() ? "" : (" " + spec.target)) << "\n";
     return 0;
 }
 
@@ -76,8 +82,13 @@ int host_remove(const std::string& alias) {
 int host_list() {
     json h = load();
     for (const auto& [alias, e] : h.items()) {
-        std::cout << "@" << alias << "  ->  " << e.value("transport", std::string())
-                  << "  " << e.value("target", std::string()) << "\n";
+        std::cout << "@" << alias << "  ->  " << e.value("transport", std::string()) << "  "
+                  << e.value("target", std::string());
+        if (e.contains("port")) std::cout << "  -p " << e.value("port", std::string());
+        if (e.contains("identity")) std::cout << "  -i " << e.value("identity", std::string());
+        if (e.contains("extra")) std::cout << "  [" << e.value("extra", std::string()) << "]";
+        if (e.contains("remote_kuli")) std::cout << "  kuli=" << e.value("remote_kuli", std::string());
+        std::cout << "\n";
     }
     return 0;
 }

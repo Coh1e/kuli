@@ -106,11 +106,21 @@ nlohmann::json read_hosts() {
     return j.is_object() ? j : nlohmann::json::object();
 }
 
+std::vector<std::string> split_ws(const std::string& s) {
+    std::vector<std::string> out;
+    std::istringstream ss(s);
+    std::string tok;
+    while (ss >> tok) out.push_back(tok);
+    return out;
+}
+
 // Transport (§ transport): execute an IR whose node targets a non-local `at:`.
 // The target IR is rewritten to `local:` and shipped (over stdin) to a kuli on
 // the far side — a child process (local-subprocess) or `ssh <host> kuli run-ir -`.
-// `@alias` resolves through the host registry. Output is relayed back.
+// `@alias` resolves through the host registry (incl. ssh port/identity/extra/
+// remote-kuli options). Output is relayed back.
 RawResult route_remote(const AdapterCall& call, std::string at) {
+    std::string transport, target, port, identity, extra, remote_kuli = "kuli";
     if (!at.empty() && at[0] == '@') {  // resolve a host alias
         std::string alias = at.substr(1);
         nlohmann::json hosts = read_hosts();
@@ -120,28 +130,44 @@ RawResult route_remote(const AdapterCall& call, std::string at) {
                             .with_help("register it: kuli host add " + alias + " <user@host>"),
                         "");
         }
-        std::string transport = hosts[alias].value("transport", std::string("ssh"));
-        std::string target = hosts[alias].value("target", std::string());
-        at = (transport == "local-subprocess") ? "local-subprocess:" : ("ssh:" + target);
-    }
-
-    std::vector<std::string> spawn;
-    if (at == "local-subprocess:" || at == "subprocess:") {
-        spawn = {kuli::platform::paths::current_exe().string(), "run-ir", "-"};
+        const auto& e = hosts[alias];
+        transport = e.value("transport", std::string("ssh"));
+        target = e.value("target", std::string());
+        port = e.value("port", std::string());
+        identity = e.value("identity", std::string());
+        extra = e.value("extra", std::string());
+        std::string rk = e.value("remote_kuli", std::string());
+        if (!rk.empty()) remote_kuli = rk;
+    } else if (at == "local-subprocess:" || at == "subprocess:") {
+        transport = "local-subprocess";
     } else if (at.rfind("ssh:", 0) == 0) {
-        std::string target = at.substr(4);
-        if (target.empty()) {
-            return fail(2, kuli::diag::Diagnostic::error("ssh: needs a target (ssh:user@host)",
-                                                         "E0643"),
-                        "");
-        }
-        spawn = {"ssh", target, "kuli", "run-ir", "-"};  // assumes kuli on the remote PATH
+        transport = "ssh";
+        target = at.substr(4);
     } else {
         return fail(2,
                     kuli::diag::Diagnostic::error("transport for at: '" + at + "' not implemented yet",
                                                   "E0640")
                         .with_help("supported: local:, local-subprocess:, ssh:<target>, @alias"),
                     "");
+    }
+
+    std::vector<std::string> spawn;
+    if (transport == "local-subprocess") {
+        spawn = {kuli::platform::paths::current_exe().string(), "run-ir", "-"};
+    } else {  // ssh
+        if (target.empty()) {
+            return fail(2, kuli::diag::Diagnostic::error("ssh transport needs a target (user@host)",
+                                                         "E0643"),
+                        "");
+        }
+        spawn = {"ssh"};
+        if (!port.empty()) { spawn.push_back("-p"); spawn.push_back(port); }
+        if (!identity.empty()) { spawn.push_back("-i"); spawn.push_back(identity); }
+        for (auto& a : split_ws(extra)) spawn.push_back(std::move(a));
+        spawn.push_back(target);
+        spawn.push_back(remote_kuli);  // remote PATH lookup or full path
+        spawn.push_back("run-ir");
+        spawn.push_back("-");
     }
 
     nlohmann::json ir = call.ir_doc;

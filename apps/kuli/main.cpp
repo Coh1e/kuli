@@ -130,11 +130,16 @@ int run_generation(const std::vector<std::string>& args) {
 int run_host(const std::vector<std::string>& args) {
     CLI::App app{"kuli host — transport aliases for @<name>"};
     app.require_subcommand(0, 1);
-    std::string add_alias, add_target, add_transport;
+    std::string add_alias;
+    kuli::bp::HostSpec spec;
     auto* add = app.add_subcommand("add", "Register a host alias");
     add->add_option("alias", add_alias, "Alias (referenced as @alias)")->required();
-    add->add_option("target", add_target, "ssh target user@host (omit for local-subprocess)");
-    add->add_option("--transport", add_transport, "ssh | local-subprocess")->default_val("ssh");
+    add->add_option("target", spec.target, "ssh target user@host (omit for local-subprocess)");
+    add->add_option("--transport", spec.transport, "ssh | local-subprocess")->default_val("ssh");
+    add->add_option("--port", spec.port, "ssh port (-p)");
+    add->add_option("--identity", spec.identity, "ssh identity / key file (-i)");
+    add->add_option("--extra", spec.extra, "extra ssh args (whitespace-split)");
+    add->add_option("--remote-kuli", spec.remote_kuli, "kuli path on the remote (default: kuli)");
     std::string rm_alias;
     auto* rm = app.add_subcommand("rm", "Remove a host alias");
     rm->add_option("alias", rm_alias, "Alias")->required();
@@ -142,7 +147,7 @@ int run_host(const std::vector<std::string>& args) {
 
     KULI_PARSE(app, args);
 
-    if (*add) return kuli::bp::host_add(add_alias, add_target, add_transport);
+    if (*add) return kuli::bp::host_add(add_alias, spec);
     if (*rm) return kuli::bp::host_remove(rm_alias);
     return kuli::bp::host_list();  // ls or bare
 }
