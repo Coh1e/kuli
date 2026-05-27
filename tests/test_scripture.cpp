@@ -274,3 +274,57 @@ TEST_CASE("scripture FileQuery walks the filesystem and matches name globs") {
 
     fs::remove_all(dir);
 }
+
+TEST_CASE("scripture TextSearch greps file contents and reports path:line:text") {
+    fs::path dir = scratch();
+    fs::create_directories(dir / "sub");
+    { std::ofstream(dir / "a.txt") << "alpha\nTODO: fix\nbeta\n"; }
+    { std::ofstream(dir / "sub" / "b.txt") << "nothing here\ntodo lower\n"; }
+
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::TextSearch);
+    ir["node"] = {{"at", "local:"},
+                  {"roots", nlohmann::json::array({dir.string()})},
+                  {"pattern", "TODO"}};
+
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "grep";
+    call.cwd = dir;
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+
+    CHECK(rr.exit_code == 0);
+    REQUIRE(rr.lines.size() == 1);  // case-sensitive: "TODO: fix" only ("todo lower" excluded)
+    CHECK(rr.lines[0].find("a.txt") != std::string::npos);
+    CHECK(rr.lines[0].find(":2:TODO: fix") != std::string::npos);  // line number + text
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("scripture TextSearch supports regex + ignoreCase") {
+    fs::path dir = scratch();
+    { std::ofstream(dir / "log.txt") << "ERROR 42\nwarn\nerror 7\n"; }
+
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::TextSearch);
+    ir["node"] = {{"at", "local:"},
+                  {"roots", nlohmann::json::array({dir.string()})},
+                  {"pattern", "err.r [0-9]+"},
+                  {"regex", true},
+                  {"ignoreCase", true}};
+
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "grep";
+    call.cwd = dir;
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+
+    CHECK(rr.exit_code == 0);
+    REQUIRE(rr.lines.size() == 2);  // "ERROR 42" + "error 7"; "warn" excluded
+
+    fs::remove_all(dir);
+}

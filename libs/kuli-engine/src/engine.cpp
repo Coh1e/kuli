@@ -1,9 +1,12 @@
 #include "kuli/engine/engine.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <fstream>
+#include <optional>
 #include <random>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -110,26 +113,21 @@ bool glob_match(const std::string& pat, const std::string& s) {
     return p == pat.size();
 }
 
-// FileQuery (§4.4): a flat read IR — walk `roots` and emit paths matching the
-// optional name globs / type / depth. Local filesystem only (native, dep-free);
-// remote `at:` URIs are a later increment.
-RawResult execute_file_query(const json& node, const fs::path& cwd) {
-    RawResult r;
-    std::string at = node.value("at", std::string("local:"));
-    if (at != "local:" && at != "local") {
-        return fail(2,
-                    kuli::diag::Diagnostic::error(
-                        "FileQuery 'at: " + at + "' is not supported yet (local: only)", "E0600"),
-                    "");
-    }
+std::string ascii_lower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 
+// Walk node.roots (relative to cwd) collecting entries that pass the optional
+// name globs / type / maxDepth filters. Shared by FileQuery + TextSearch
+// (native std::filesystem, dep-free; remote `at:` URIs are a later increment).
+std::vector<fs::path> collect_paths(const json& node, const fs::path& cwd,
+                                    const std::string& type) {
     std::vector<std::string> names;
     for (const auto& g : node.value("name", json::array())) {
         if (g.is_string()) names.push_back(g.get<std::string>());
     }
-    std::string type = node.value("type", std::string("any"));  // "f" | "d" | "any"
-    int max_depth = node.value("maxDepth", 0);                   // 0 = unlimited
-
+    int max_depth = node.value("maxDepth", 0);  // 0 = unlimited
     auto name_ok = [&](const std::string& fname) {
         if (names.empty()) return true;
         for (const auto& g : names) {
@@ -138,6 +136,7 @@ RawResult execute_file_query(const json& node, const fs::path& cwd) {
         return false;
     };
 
+    std::vector<fs::path> out;
     for (const auto& root_j : node.value("roots", json::array())) {
         if (!root_j.is_string()) continue;
         fs::path root = root_j.get<std::string>();
@@ -160,10 +159,87 @@ RawResult execute_file_query(const json& node, const fs::path& cwd) {
             if (type == "f" && is_dir) continue;
             if (type == "d" && !is_dir) continue;
             if (!name_ok(e.path().filename().string())) continue;
-            r.lines.push_back(e.path().string());
+            out.push_back(e.path());
         }
     }
+    return out;
+}
+
+// FileQuery (§4.4): a flat read IR — emit paths matching the name/type/depth
+// filters. Local filesystem only.
+RawResult execute_file_query(const json& node, const fs::path& cwd) {
+    std::string at = node.value("at", std::string("local:"));
+    if (at != "local:" && at != "local") {
+        return fail(2,
+                    kuli::diag::Diagnostic::error(
+                        "FileQuery 'at: " + at + "' is not supported yet (local: only)", "E0600"),
+                    "");
+    }
+    RawResult r;
+    std::string type = node.value("type", std::string("any"));  // "f" | "d" | "any"
+    for (const auto& p : collect_paths(node, cwd, type)) r.lines.push_back(p.string());
     std::sort(r.lines.begin(), r.lines.end());  // stable output
+    return r;
+}
+
+// TextSearch (§4.4): grep/rg-style content search — for each file under the
+// roots (optionally name-filtered), emit "path:lineno:line" for matching lines.
+// Literal substring by default; `regex: true` switches to std::regex
+// (ECMAScript). `ignoreCase` applies to both. Binary files (a NUL byte) skip.
+RawResult execute_text_search(const json& node, const fs::path& cwd) {
+    std::string at = node.value("at", std::string("local:"));
+    if (at != "local:" && at != "local") {
+        return fail(2,
+                    kuli::diag::Diagnostic::error(
+                        "TextSearch 'at: " + at + "' is not supported yet (local: only)", "E0601"),
+                    "");
+    }
+    std::string pattern = node.value("pattern", std::string());
+    if (pattern.empty()) {
+        return fail(2, kuli::diag::Diagnostic::error("TextSearch requires a non-empty 'pattern'",
+                                                     "E0602"),
+                    "");
+    }
+    bool icase = node.value("ignoreCase", false);
+    bool use_regex = node.value("regex", false);
+
+    std::optional<std::regex> re;
+    std::string needle = icase ? ascii_lower(pattern) : pattern;
+    if (use_regex) {
+        try {
+            auto flags = std::regex::ECMAScript;
+            if (icase) flags |= std::regex::icase;
+            re.emplace(pattern, flags);
+        } catch (const std::regex_error& e) {
+            return fail(2,
+                        kuli::diag::Diagnostic::error(
+                            "TextSearch invalid regex: " + std::string(e.what()), "E0603"),
+                        "");
+        }
+    }
+    auto matches = [&](const std::string& line) {
+        if (re) return std::regex_search(line, *re);
+        if (icase) return ascii_lower(line).find(needle) != std::string::npos;
+        return line.find(needle) != std::string::npos;
+    };
+
+    RawResult r;
+    std::vector<fs::path> files = collect_paths(node, cwd, "f");
+    std::sort(files.begin(), files.end());
+    for (const auto& f : files) {
+        std::ifstream in(f, std::ios::binary);
+        if (!in) continue;
+        std::string line;
+        int n = 0;
+        while (std::getline(in, line)) {
+            if (line.find('\0') != std::string::npos) break;  // binary -> skip the file
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            ++n;
+            if (matches(line)) {
+                r.lines.push_back(f.string() + ":" + std::to_string(n) + ":" + line);
+            }
+        }
+    }
     return r;
 }
 
@@ -186,8 +262,12 @@ RawResult Engine::execute(const AdapterCall& call) {
 
     // Flat read IRs short-circuit here — no plan expansion, no evidence session
     // (they are side-effect-free).
-    if (call.ir_doc.value("kind", std::string{}) == std::string(kuli::ir::kind::FileQuery)) {
+    std::string ir_kind = call.ir_doc.value("kind", std::string{});
+    if (ir_kind == std::string(kuli::ir::kind::FileQuery)) {
         return execute_file_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
+    }
+    if (ir_kind == std::string(kuli::ir::kind::TextSearch)) {
+        return execute_text_search(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
     }
 
     const bool dry_run =

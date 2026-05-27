@@ -19,7 +19,8 @@ inline constexpr std::string_view SCHEMA = "kuli/ir/1.0";
 
 namespace kind {
 inline constexpr std::string_view ApplyDerivation = "ApplyDerivation";
-inline constexpr std::string_view FileQuery = "FileQuery";  // find/fd-style read (§4.4)
+inline constexpr std::string_view FileQuery = "FileQuery";    // find/fd-style read (§4.4)
+inline constexpr std::string_view TextSearch = "TextSearch";  // grep/rg-style read (§4.4)
 inline constexpr std::string_view EnvSet = "EnvSet";
 inline constexpr std::string_view FileOp = "FileOp";
 inline constexpr std::string_view Exec = "Exec";
