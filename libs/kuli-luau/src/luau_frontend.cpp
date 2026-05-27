@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -479,6 +480,62 @@ void on_interrupt(lua_State* L, int /*gc*/) {
     }
 }
 
+// Convert a Luau value to JSON (for an adapter's return — an IR node or a text
+// result). A table with a sequence length > 0 becomes an array, otherwise an
+// object built from its string keys (mixed tables are rare in adapter returns;
+// the sequence part wins). Non-integral numbers stay doubles. `depth` bounds
+// recursion (and breaks any cyclic table).
+nlohmann::json table_to_json(lua_State* L, int idx, int depth) {
+    using nlohmann::json;
+    switch (lua_type(L, idx)) {
+        case LUA_TNIL:
+        case LUA_TNONE:
+            return json(nullptr);
+        case LUA_TBOOLEAN:
+            return json(static_cast<bool>(lua_toboolean(L, idx)));
+        case LUA_TNUMBER: {
+            double d = lua_tonumber(L, idx);
+            double ip = 0.0;
+            if (std::modf(d, &ip) == 0.0 && std::abs(d) < 9e15) {
+                return json(static_cast<long long>(d));
+            }
+            return json(d);
+        }
+        case LUA_TSTRING: {
+            std::size_t len = 0;
+            const char* c = lua_tolstring(L, idx, &len);
+            return json(std::string(c, len));
+        }
+        case LUA_TTABLE: {
+            if (depth <= 0) return json(nullptr);
+            int ai = idx < 0 ? lua_gettop(L) + idx + 1 : idx;  // absolute index
+            int n = lua_objlen(L, ai);
+            if (n > 0) {  // sequence -> array
+                json arr = json::array();
+                for (int i = 1; i <= n; ++i) {
+                    lua_rawgeti(L, ai, i);
+                    arr.push_back(table_to_json(L, -1, depth - 1));
+                    lua_pop(L, 1);
+                }
+                return arr;
+            }
+            json obj = json::object();  // map -> object (string keys only)
+            lua_pushnil(L);
+            while (lua_next(L, ai) != 0) {
+                if (lua_type(L, -2) == LUA_TSTRING) {
+                    std::size_t kl = 0;
+                    const char* k = lua_tolstring(L, -2, &kl);
+                    obj[std::string(k, kl)] = table_to_json(L, -1, depth - 1);
+                }
+                lua_pop(L, 1);  // pop value, keep key
+            }
+            return obj;
+        }
+        default:
+            return json(nullptr);
+    }
+}
+
 // Shared "exceeded the evaluation time budget" diagnostic (H-1 resource limit).
 Diagnostic time_budget_diag(const char* what) {
     return Diagnostic::of(Kind::Sandbox,
@@ -761,24 +818,13 @@ std::expected<AdapterResult, Diagnostic> evaluate_adapter(const AdapterRequest& 
     if (lua_type(L, -1) != LUA_TTABLE) {
         lua_unref(L, st.ctx_ref);
         return std::unexpected(Diagnostic::error(
-            "scripture adapter must return a result table { lines = { ... } }", "E0954"));
+            "scripture adapter must return a result table "
+            "({ lines = {...} } or an IR node { kind = ... })",
+            "E0954"));
     }
 
     AdapterResult res;
-    lua_getfield(L, -1, "lines");
-    if (lua_type(L, -1) == LUA_TTABLE) {
-        int n = lua_objlen(L, -1);
-        for (int i = 1; i <= n; ++i) {
-            lua_rawgeti(L, -1, i);
-            if (lua_type(L, -1) == LUA_TSTRING) {
-                std::size_t len = 0;
-                const char* c = lua_tolstring(L, -1, &len);
-                res.lines.emplace_back(c, len);
-            }
-            lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);  // pop lines
+    res.value = table_to_json(L, -1, /*depth=*/32);
     lua_unref(L, st.ctx_ref);
     return res;
 }

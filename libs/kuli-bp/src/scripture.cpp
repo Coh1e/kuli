@@ -3,8 +3,12 @@
 #include <iostream>
 #include <optional>
 
+#include <nlohmann/json.hpp>
+
 #include "kuli/bp/generation.hpp"
 #include "kuli/diag/diagnostic.hpp"
+#include "kuli/engine/engine.hpp"
+#include "kuli/ir/ir.hpp"
 #include "kuli/luau/frontend.hpp"
 #include "kuli/platform/host.hpp"
 #include "kuli/platform/paths.hpp"
@@ -41,7 +45,7 @@ bool is_installed_basename(const std::string& basename) {
 }
 
 int run_basename(const std::string& basename, const std::vector<std::string>& argv,
-                 const fs::path& /*cwd*/) {
+                 const fs::path& cwd) {
     auto cur = default_profile().current();
     if (!cur) {
         return report(kuli::diag::Diagnostic::error(
@@ -65,8 +69,37 @@ int run_basename(const std::string& basename, const std::vector<std::string>& ar
 
     auto res = kuli::luau::evaluate_adapter(req);
     if (!res) return report(res.error());
-    for (const auto& line : res->lines) std::cout << line << "\n";
-    return 0;
+    const nlohmann::json& v = res->value;
+
+    // IR-node form `{ kind = "...", node = {...} }` — wrap in the envelope and
+    // dispatch to the engine (§9.2: adapter -> IR -> engine.execute -> render).
+    if (v.is_object() && v.contains("kind") && v["kind"].is_string()) {
+        nlohmann::json ir;
+        ir["schema"] = std::string(kuli::ir::SCHEMA);
+        ir["kind"] = v["kind"];
+        ir["node"] = v.value("node", nlohmann::json::object());
+
+        kuli::engine::Engine engine;
+        kuli::engine::AdapterCall call;
+        call.tool_name = basename;
+        call.cwd = cwd;
+        call.ir_doc = std::move(ir);
+        kuli::engine::RawResult rr = engine.execute(call);
+        for (const auto& line : rr.lines) std::cout << line << "\n";
+        if (!rr.raw_stderr.empty()) std::cerr << rr.raw_stderr;
+        return rr.exit_code;
+    }
+
+    // Pure text form `{ lines = { "..." } }`.
+    if (v.is_object() && v.contains("lines") && v["lines"].is_array()) {
+        for (const auto& l : v["lines"]) {
+            if (l.is_string()) std::cout << l.get<std::string>() << "\n";
+        }
+        return 0;
+    }
+
+    return report(kuli::diag::Diagnostic::error(
+        "scripture '" + basename + "' returned neither { lines } nor an IR { kind }", "E0962"));
 }
 
 int scripture_list() {

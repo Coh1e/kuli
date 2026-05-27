@@ -115,6 +115,24 @@ std::expected<void, Diagnostic> validate_apply_derivation(const json& node) {
     return {};
 }
 
+std::expected<void, Diagnostic> validate_file_query(const json& node) {
+    if (!node.is_object()) return std::unexpected(invalid("FileQuery.node must be an object"));
+    // `at` defaults to "local:"; only an absent or string value is accepted.
+    if (node.contains("at") && !node["at"].is_string()) {
+        return std::unexpected(invalid("FileQuery.node.at must be a string URI"));
+    }
+    if (!node.contains("roots") || !node["roots"].is_array() || node["roots"].empty()) {
+        return std::unexpected(invalid("FileQuery.node.roots must be a non-empty array"));
+    }
+    for (const auto& r : node["roots"]) {
+        if (!r.is_string()) return std::unexpected(invalid("FileQuery root must be a string"));
+    }
+    if (node.contains("name") && !node["name"].is_array()) {
+        return std::unexpected(invalid("FileQuery.node.name must be an array of globs"));
+    }
+    return {};
+}
+
 }  // namespace
 
 std::expected<void, Diagnostic> validate(const json& doc) {
@@ -127,6 +145,7 @@ std::expected<void, Diagnostic> validate(const json& doc) {
 
     std::string k = doc["kind"];
     if (k == kind::ApplyDerivation) return validate_apply_derivation(doc["node"]);
+    if (k == kind::FileQuery) return validate_file_query(doc["node"]);
     // Other kinds are declared but not yet validated in depth.
     if (k == kind::EnvSet || k == kind::FileOp || k == kind::Exec) return {};
     return std::unexpected(invalid("unknown IR kind '" + k + "'"));

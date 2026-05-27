@@ -1,10 +1,12 @@
 #include "kuli/engine/engine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <random>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "kuli/crypto/hash.hpp"
 #include "kuli/diag/diagnostic.hpp"
@@ -87,6 +89,84 @@ RawResult fail(int code, const kuli::diag::Diagnostic& d, const std::string& ses
     return r;
 }
 
+// Classic `*` / `?` wildcard match (basename-style, case-sensitive like find).
+bool glob_match(const std::string& pat, const std::string& s) {
+    std::size_t p = 0, t = 0, star = std::string::npos, mark = 0;
+    while (t < s.size()) {
+        if (p < pat.size() && (pat[p] == '?' || pat[p] == s[t])) {
+            ++p;
+            ++t;
+        } else if (p < pat.size() && pat[p] == '*') {
+            star = p++;
+            mark = t;
+        } else if (star != std::string::npos) {
+            p = star + 1;
+            t = ++mark;
+        } else {
+            return false;
+        }
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+// FileQuery (§4.4): a flat read IR — walk `roots` and emit paths matching the
+// optional name globs / type / depth. Local filesystem only (native, dep-free);
+// remote `at:` URIs are a later increment.
+RawResult execute_file_query(const json& node, const fs::path& cwd) {
+    RawResult r;
+    std::string at = node.value("at", std::string("local:"));
+    if (at != "local:" && at != "local") {
+        return fail(2,
+                    kuli::diag::Diagnostic::error(
+                        "FileQuery 'at: " + at + "' is not supported yet (local: only)", "E0600"),
+                    "");
+    }
+
+    std::vector<std::string> names;
+    for (const auto& g : node.value("name", json::array())) {
+        if (g.is_string()) names.push_back(g.get<std::string>());
+    }
+    std::string type = node.value("type", std::string("any"));  // "f" | "d" | "any"
+    int max_depth = node.value("maxDepth", 0);                   // 0 = unlimited
+
+    auto name_ok = [&](const std::string& fname) {
+        if (names.empty()) return true;
+        for (const auto& g : names) {
+            if (glob_match(g, fname)) return true;
+        }
+        return false;
+    };
+
+    for (const auto& root_j : node.value("roots", json::array())) {
+        if (!root_j.is_string()) continue;
+        fs::path root = root_j.get<std::string>();
+        if (root.is_relative()) root = cwd / root;
+        std::error_code ec;
+        if (!fs::exists(root, ec)) continue;
+
+        fs::recursive_directory_iterator it(
+            root, fs::directory_options::skip_permission_denied, ec);
+        fs::recursive_directory_iterator end;
+        for (; it != end; it.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+            if (max_depth > 0 && it.depth() + 1 >= max_depth) it.disable_recursion_pending();
+            const fs::directory_entry& e = *it;
+            std::error_code tec;
+            bool is_dir = e.is_directory(tec);
+            if (type == "f" && is_dir) continue;
+            if (type == "d" && !is_dir) continue;
+            if (!name_ok(e.path().filename().string())) continue;
+            r.lines.push_back(e.path().string());
+        }
+    }
+    std::sort(r.lines.begin(), r.lines.end());  // stable output
+    return r;
+}
+
 }  // namespace
 
 ExecEnv default_exec_env() {
@@ -102,6 +182,12 @@ RawResult Engine::execute(const AdapterCall& call) {
     // 1) Validate against kuli/ir/1.0.
     if (auto v = kuli::ir::validate(call.ir_doc); !v) {
         return fail(kuli::diag::exit_code_of(v.error()), v.error(), "");
+    }
+
+    // Flat read IRs short-circuit here — no plan expansion, no evidence session
+    // (they are side-effect-free).
+    if (call.ir_doc.value("kind", std::string{}) == std::string(kuli::ir::kind::FileQuery)) {
+        return execute_file_query(call.ir_doc.value("node", nlohmann::json::object()), call.cwd);
     }
 
     const bool dry_run =

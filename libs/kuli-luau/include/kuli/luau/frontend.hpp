@@ -13,6 +13,8 @@
 #include <filesystem>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "kuli/diag/diagnostic.hpp"
 #include "kuli/luau/derivation.hpp"
 
@@ -71,8 +73,10 @@ std::expected<EvalResult, kuli::diag::Diagnostic> evaluate(const EvalRequest& re
 // Running an installed scripture basename: load its adapter .luau from the
 // store and call `function(ctx)` with ctx.argv = the command-line arguments.
 // Same sandbox as a blueprint (R-NF-03); ctx.lib.readResource reads files under
-// the scripture's own store path. The adapter returns a result the engine
-// renders. v0 supports the pure form `{ lines = { "..." } }`.
+// the scripture's own store path. The adapter returns a Luau table that is
+// converted to JSON verbatim (`value`). Two shapes are meaningful to the caller:
+//   * `{ lines = { "..." } }`            — pure text, printed directly
+//   * `{ kind = "FileQuery", node = {} }` — an IR node dispatched to the engine
 struct AdapterRequest {
     std::filesystem::path adapter_path;    // the adapter .luau inside the store
     std::filesystem::path scripture_root;  // the scripture store path (readResource base)
@@ -82,7 +86,7 @@ struct AdapterRequest {
 };
 
 struct AdapterResult {
-    std::vector<std::string> lines;  // text the engine prints verbatim
+    nlohmann::json value;  // the adapter's returned table, converted to JSON
 };
 
 std::expected<AdapterResult, kuli::diag::Diagnostic> evaluate_adapter(const AdapterRequest& req);

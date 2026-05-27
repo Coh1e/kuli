@@ -7,7 +7,11 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "kuli/bp/generation.hpp"
+#include "kuli/engine/engine.hpp"
+#include "kuli/ir/ir.hpp"
 #include "kuli/luau/frontend.hpp"
 #include "kuli/luau/hashing.hpp"
 #include "kuli/store/store.hpp"
@@ -163,9 +167,10 @@ TEST_CASE("scripture adapter runs in the sandbox and renders lines") {
 
     auto res = luau::evaluate_adapter(req);
     REQUIRE(res.has_value());
-    REQUIRE(res->lines.size() == 2);
-    CHECK(res->lines[0] == "hello, alice");
-    CHECK(res->lines[1] == "argc=1");
+    auto lines = res->value.value("lines", std::vector<std::string>{});
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[0] == "hello, alice");
+    CHECK(lines[1] == "argc=1");
 
     fs::remove_all(dir);
 }
@@ -205,8 +210,67 @@ TEST_CASE("scripture end-to-end: realize from the graph, then run the adapter fr
 
     auto res = luau::evaluate_adapter(req);
     REQUIRE(res.has_value());
-    REQUIRE(res->lines.size() == 1);
-    CHECK(res->lines[0] == "hello, bob");
+    auto lines = res->value.value("lines", std::vector<std::string>{});
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0] == "hello, bob");
 
     fs::remove_all(root);
+}
+
+TEST_CASE("scripture adapter can emit a FileQuery IR node") {
+    fs::path dir = scratch();
+    {
+        std::ofstream o(dir / "find.luau", std::ios::binary);
+        o << "return function(ctx)\n"
+             "  return { kind = 'FileQuery', node = {\n"
+             "    at = 'local:', roots = { ctx.argv[1] or '.' },\n"
+             "    name = { '*.cpp' }, type = 'f' } }\n"
+             "end\n";
+    }
+    luau::AdapterRequest req;
+    req.adapter_path = dir / "find.luau";
+    req.scripture_root = dir;
+    req.argv = {"/some/root"};
+    req.system = luau::SystemInfo{"windows", "x64", "11"};
+
+    auto res = luau::evaluate_adapter(req);
+    REQUIRE(res.has_value());
+    const auto& v = res->value;
+    CHECK(v.value("kind", "") == "FileQuery");
+    REQUIRE(v["node"]["roots"].is_array());
+    CHECK(v["node"]["roots"][0] == "/some/root");
+    CHECK(v["node"]["name"][0] == "*.cpp");
+    CHECK(v["node"]["type"] == "f");
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("scripture FileQuery walks the filesystem and matches name globs") {
+    fs::path dir = scratch();
+    fs::create_directories(dir / "sub");
+    { std::ofstream(dir / "a.cpp") << "x"; }
+    { std::ofstream(dir / "b.hpp") << "x"; }
+    { std::ofstream(dir / "sub" / "c.cpp") << "x"; }
+
+    nlohmann::json ir;
+    ir["schema"] = std::string(kuli::ir::SCHEMA);
+    ir["kind"] = std::string(kuli::ir::kind::FileQuery);
+    ir["node"] = {{"at", "local:"},
+                  {"roots", nlohmann::json::array({dir.string()})},
+                  {"name", nlohmann::json::array({"*.cpp"})},
+                  {"type", "f"}};
+
+    kuli::engine::Engine engine;
+    kuli::engine::AdapterCall call;
+    call.tool_name = "find";
+    call.cwd = dir;
+    call.ir_doc = ir;
+    auto rr = engine.execute(call);
+
+    CHECK(rr.exit_code == 0);
+    REQUIRE(rr.lines.size() == 2);                       // a.cpp + sub/c.cpp; b.hpp excluded
+    CHECK(rr.lines[0].find("a.cpp") != std::string::npos);  // sorted: a before sub/c
+    CHECK(rr.lines[1].find("c.cpp") != std::string::npos);
+
+    fs::remove_all(dir);
 }
